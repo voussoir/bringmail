@@ -18,6 +18,7 @@ class FakeSessionClient:
         self.selected = None
         self.added_flags = []
         self.removed_flags = []
+        self.moved = []
         self.logged_out = False
         self.noops = 0
 
@@ -30,6 +31,15 @@ class FakeSessionClient:
 
     def remove_flags(self, messages, flags):
         self.removed_flags.append((list(messages), list(flags)))
+
+    def move(self, messages, folder):
+        self.moved.append((list(messages), folder))
+        return b'OK'
+
+    def search(self, criteria):
+        if criteria and criteria[0].upper() == 'HEADER':
+            return [42]
+        return []
 
     def noop(self):
         self.noops += 1
@@ -74,7 +84,7 @@ class SessionTest(unittest.TestCase):
                     'to': [],
                     'cc': [],
                     'date_unix': 1,
-                    'message_id': None,
+                    'message_id': '<test@example.com>',
                     'has_attachments': False,
                     'snippet': '',
                 },
@@ -114,6 +124,43 @@ class SessionTest(unittest.TestCase):
             helpers.imap_call(self.account, lambda client: client.select_folder('INBOX'))
 
         self.assertEqual(connect.call_count, 2)
+
+    def test_move_and_delete(self):
+        with self.db.transaction:
+            archive = self.db.add_folder(
+                account=self.account,
+                name='Archive',
+                display_name='Archive',
+                delimiter='/',
+            )
+            self.db.add_folder(
+                account=self.account,
+                name='Trash',
+                display_name='Trash',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_TRASH,
+            )
+
+        with mock.patch('bringmail.helpers.connect_imap', return_value=self.client):
+            self.message.move_to(archive)
+            self.assertEqual(self.message.folder_id, archive.id)
+            self.assertEqual(self.message.uid, 42)
+            self.assertEqual(self.message.uidvalidity, 1)
+            self.assertEqual(self.client.moved[-1], ([1], 'Archive'))
+
+            self.message.delete()
+            trash = self.account.get_trash_folder()
+            self.assertIsNotNone(trash)
+            self.assertEqual(self.message.folder_id, trash.id)
+            self.assertEqual(self.message.uid, 42)
+            self.assertEqual(self.client.moved[-1], ([42], 'Trash'))
+
+        row = self.db.select_one(
+            'SELECT folder_id, uid FROM messages WHERE id == ?',
+            [self.message.id],
+        )
+        self.assertEqual(row['folder_id'], trash.id)
+        self.assertEqual(row['uid'], 42)
 
 
 if __name__ == '__main__':

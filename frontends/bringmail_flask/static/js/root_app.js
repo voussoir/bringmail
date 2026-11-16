@@ -894,7 +894,7 @@ function render_html_iframe(body) {
     }
 
     if (!allow_images) {
-        for (const element of doc.querySelectorAll("img, source, video")) {
+        for (const element of doc.querySelectorAll("img, source, video, audio")) {
             const src = element.getAttribute("src");
             if (src && /^(https?:)?\/\//i.test(src)) {
                 if (element.tagName === "IMG") {

@@ -795,7 +795,7 @@ class BDBSyncMixin:
                     uid = int(uid)
                     header_bytes = _response_header_bytes(data)
                     internaldate = data.get(b'INTERNALDATE')
-                    size = data.get(b'RFC822.SIZE')
+                    size = helpers.maybe_int(data.get(b'RFC822.SIZE'))
                     (flags, keywords, modseq) = _response_flag_info(data)
                     if header_bytes is None:
                         meta = helpers.empty_meta(
@@ -852,7 +852,7 @@ class BDBSyncMixin:
                     uid = int(uid)
                     raw = _response_body_bytes(data)
                     internaldate = data.get(b'INTERNALDATE')
-                    size = data.get(b'RFC822.SIZE')
+                    size = helpers.maybe_int(data.get(b'RFC822.SIZE'))
                     (flags, keywords, modseq) = _response_flag_info(data)
                     if raw is None:
                         meta = helpers.empty_meta(
@@ -923,7 +923,7 @@ class BDBSyncMixin:
                     if raw is None:
                         continue
                     internaldate = data.get(b'INTERNALDATE')
-                    size = data.get(b'RFC822.SIZE')
+                    size = helpers.maybe_int(data.get(b'RFC822.SIZE'))
                     (flags, keywords, modseq) = _response_flag_info(data)
                     try:
                         (message, meta) = helpers.parse_full_message(
