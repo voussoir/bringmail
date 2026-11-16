@@ -484,9 +484,6 @@ function create_message_row(message) {
     if (!message.seen) {
         row.classList.add("unread");
     }
-    if (message.flagged) {
-        row.classList.add("flagged");
-    }
     if (selected_ids.has(String(message.id))) {
         row.classList.add("message_selected");
     }
@@ -496,12 +493,6 @@ function create_message_row(message) {
     read_indicator.textContent = "●";
     read_indicator.title = "Unread";
     row.appendChild(read_indicator);
-
-    const flag = document.createElement("span");
-    flag.classList.add("flag");
-    flag.textContent = "★";
-    flag.title = "Flag / unflag";
-    row.appendChild(flag);
 
     const from = document.createElement("span");
     from.classList.add("from");
@@ -606,20 +597,6 @@ function select_range(message_id) {
 }
 
 function on_messages_click(event) {
-    if (event.target.classList.contains("flag")) {
-        const row = event.target.closest(".message");
-        if (!row) {
-            return;
-        }
-        event.stopPropagation();
-        const message = find_message(row.dataset.id);
-        if (!message) {
-            return;
-        }
-        toggle_flag(message);
-        return;
-    }
-
     const row = event.target.closest(".message");
     if (!row) {
         return;
@@ -638,28 +615,6 @@ function on_messages_click(event) {
         show_reader(message_id);
     } else if (get_selected_ids().length === 0) {
         clear_reader();
-    }
-}
-
-function toggle_flag(message) {
-    const flagged = !message.flagged;
-    api.messages.set_flagged(message.id, flagged, function(response) {
-        if (!api_was_ok(response)) {
-            show_api_error(response);
-            return;
-        }
-        set_flagged_local(message.id, flagged);
-    });
-}
-
-function set_flagged_local(message_id, flagged) {
-    const message = find_message(message_id);
-    if (message) {
-        message.flagged = flagged;
-    }
-    const row = message_row(message_id);
-    if (row) {
-        row.classList.toggle("flagged", flagged);
     }
 }
 
@@ -1057,20 +1012,6 @@ function mark_selected(seen) {
     });
 }
 
-function flag_selected(flagged) {
-    const ids = selected_or_current_ids();
-    if (ids.length === 0) {
-        return;
-    }
-    api.messages.batch_set_flagged(ids, flagged, function(response) {
-        batch_result_handler(response, function(returned_ids) {
-            for (const message_id of returned_ids) {
-                set_flagged_local(message_id, flagged);
-            }
-        });
-    });
-}
-
 function move_selected() {
     const select = document.getElementById("move_select");
     const folder_id = select.value;
@@ -1287,8 +1228,6 @@ function on_pageload() {
     document.getElementById("refresh_folder_button").addEventListener("click", refresh_active);
     document.getElementById("mark_read_button").addEventListener("click", function() { mark_selected(true); });
     document.getElementById("mark_unread_button").addEventListener("click", function() { mark_selected(false); });
-    document.getElementById("flag_button").addEventListener("click", function() { flag_selected(true); });
-    document.getElementById("unflag_button").addEventListener("click", function() { flag_selected(false); });
     document.getElementById("delete_button").addEventListener("click", delete_selected);
     document.getElementById("move_select").addEventListener("change", move_selected);
     load_more_button.addEventListener("click", function() { load_messages(false); });

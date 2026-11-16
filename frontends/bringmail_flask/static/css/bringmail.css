@@ -172,6 +172,13 @@ body
     line-height: 1.4em;
 }
 
+#accounts .folders
+{
+    margin-left: 1.1em;
+    padding-left: 0.35em;
+    border-left: 1px solid rgba(127, 127, 127, 0.35);
+}
+
 #accounts .account.collapsed .folders
 {
     display: none;
@@ -199,7 +206,7 @@ body
 #messages .message
 {
     display: grid;
-    grid-template-columns: 1.2em 1.2em minmax(5em, 12em) 1fr auto 7.5em 4.5em;
+    grid-template-columns: 1.2em minmax(5em, 12em) 1fr auto 7.5em 4.5em;
     grid-column-gap: 0.5em;
     align-items: baseline;
     padding: 2px 4px;
@@ -216,19 +223,6 @@ body
 #messages .message.message_selected
 {
     background-color: var(--color_selection) !important;
-}
-
-#messages .message .flag
-{
-    cursor: pointer;
-    opacity: 0.35;
-    text-align: center;
-}
-
-#messages .message .flag.flagged
-{
-    opacity: 1;
-    color: #ffd700;
 }
 
 #messages .message .read_indicator
@@ -393,7 +387,7 @@ body
 
     #messages .message
     {
-        grid-template-columns: 1.2em minmax(4em, 8em) 1fr 5em;
+        grid-template-columns: minmax(4em, 8em) 1fr 5em;
     }
 
     #messages .message .read_indicator,

@@ -75,6 +75,14 @@ class FlaskTest(unittest.TestCase):
         response = self.client.get('/about')
         self.assertEqual(response.status_code, 200)
 
+    def test_root_has_no_flag_controls(self):
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b'flag_button', response.data)
+        self.assertNotIn(b'unflag_button', response.data)
+        self.assertNotIn(b'>Flag<', response.data)
+        self.assertNotIn(b'>Unflag<', response.data)
+
     def test_account_settings_pages(self):
         response = self.client.get('/account/add')
         self.assertEqual(response.status_code, 200)

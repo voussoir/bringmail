@@ -24,7 +24,8 @@ Features
   message you have synced is available offline.
 - Optional header-first import of large folders: the message list becomes
   usable while bodies fill in newest-first.
-- Read/unread, flag/unflag, move to folder, and delete to Trash.
+- Read/unread, move to folder, and delete to Trash. Flag state is synchronized
+  and retained in the backend, but the web UI does not expose flag controls.
 - The reader opens in plaintext mode by default; HTML remains one click away.
   HTML mail is sanitized server-side and rendered inside a sandboxed iframe.
   Remote images are blocked until you click "Load images"; inline `cid:` images

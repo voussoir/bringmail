@@ -84,14 +84,6 @@ api.messages.set_seen = function(message_id, seen, callback) {
     });
 };
 
-api.messages.set_flagged = function(message_id, flagged, callback) {
-    return http.post({
-        url: `/message/${message_id}/set_flagged`,
-        data: {"flagged": flagged},
-        callback: callback,
-    });
-};
-
 api.messages.move = function(message_id, folder_id, callback) {
     return http.post({
         url: `/message/${message_id}/move`,
@@ -108,14 +100,6 @@ api.messages.batch_set_seen = function(message_ids, seen, callback) {
     return http.post({
         url: "/batch/messages/set_seen",
         data: {"message_ids": message_ids.join(","), "seen": seen},
-        callback: callback,
-    });
-};
-
-api.messages.batch_set_flagged = function(message_ids, flagged, callback) {
-    return http.post({
-        url: "/batch/messages/set_flagged",
-        data: {"message_ids": message_ids.join(","), "flagged": flagged},
         callback: callback,
     });
 };
