@@ -11,12 +11,13 @@ const MESSAGE_PAGE_SIZE = 500;
 
 let accounts_element = null;
 let messages_element = null;
-let load_more_button = null;
 let filter_input = null;
 let active_title_element = null;
 let accounts_spinner = null;
 let news_spinner = null;
 let reader_spinner = null;
+let messages_loading = false;
+let messages_request_serial = 0;
 
 let reader_subject = null;
 let reader_meta = null;
@@ -430,6 +431,9 @@ function load_messages(reset) {
     if (active_kind === null || active_id === null) {
         return;
     }
+    if (!reset && messages_loading) {
+        return;
+    }
     if (reset) {
         messages_data = [];
         messages_rendered = 0;
@@ -437,7 +441,7 @@ function load_messages(reset) {
         selected_ids = new Set();
         selection_anchor_id = null;
         common.delete_all_children(messages_element);
-        load_more_button.classList.add("hidden");
+        messages_element.scrollTop = 0;
         clear_reader();
     }
 
@@ -448,16 +452,22 @@ function load_messages(reset) {
         parameters.before_id = last.id;
     }
 
+    const serial = ++messages_request_serial;
+    messages_loading = true;
     if (messages_request) {
         messages_request.abort();
     }
     news_spinner.show(100);
 
     function callback(response) {
+        if (serial !== messages_request_serial) {
+            return;
+        }
+        messages_loading = false;
+        news_spinner.hide();
         if (!response.meta.completed) {
             return;
         }
-        news_spinner.hide();
         if (!api_was_ok(response)) {
             show_api_error(response);
             return;
@@ -470,12 +480,31 @@ function load_messages(reset) {
         messages_data.push(...data.messages);
         messages_has_more = data.has_more;
         render_messages(reset);
+        setTimeout(maybe_load_more_messages, 0);
     }
 
     if (active_kind === "folder") {
         messages_request = api.folders.get_messages(active_id, parameters, callback);
     } else {
         messages_request = api.accounts.get_messages(active_id, parameters, callback);
+    }
+}
+
+function maybe_load_more_messages() {
+    if (
+        active_kind === null ||
+        !messages_has_more ||
+        messages_loading
+    ) {
+        return;
+    }
+    const remaining = (
+        messages_element.scrollHeight -
+        messages_element.scrollTop -
+        messages_element.clientHeight
+    );
+    if (remaining <= 300) {
+        load_messages(false);
     }
 }
 
@@ -548,7 +577,6 @@ function render_messages(reset) {
         messages_element.appendChild(empty);
     }
 
-    load_more_button.classList.toggle("hidden", !messages_has_more);
     apply_filter();
 }
 
@@ -1376,7 +1404,6 @@ function figure_initial_selection() {
 function on_pageload() {
     accounts_element = document.getElementById("accounts");
     messages_element = document.getElementById("messages");
-    load_more_button = document.getElementById("load_more_button");
     filter_input = document.getElementById("filter_input");
     active_title_element = document.getElementById("active_title");
 
@@ -1405,6 +1432,7 @@ function on_pageload() {
     context_settings_link = document.getElementById("context_settings_link");
 
     messages_element.addEventListener("click", on_messages_click);
+    messages_element.addEventListener("scroll", maybe_load_more_messages);
 
     document.getElementById("refresh_all_button").addEventListener("click", refresh_all);
     document.getElementById("refresh_folder_button").addEventListener("click", refresh_active);
@@ -1412,7 +1440,6 @@ function on_pageload() {
     document.getElementById("mark_unread_button").addEventListener("click", function() { mark_selected(false); });
     document.getElementById("delete_button").addEventListener("click", delete_selected);
     document.getElementById("move_select").addEventListener("change", move_selected);
-    load_more_button.addEventListener("click", function() { load_messages(false); });
 
     filter_input.addEventListener("input", function() {
         clearTimeout(dynamic_filter_timeout);

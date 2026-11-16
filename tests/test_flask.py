@@ -90,6 +90,7 @@ class FlaskTest(unittest.TestCase):
         self.assertIn(b'id="status_text"', response.data)
         self.assertIn(b'id="status_detail"', response.data)
         self.assertIn(b'id="reader_iframe" class="hidden"', response.data)
+        self.assertNotIn(b'load_more_button', response.data)
 
     def test_account_settings_pages(self):
         response = self.client.get('/account/add')

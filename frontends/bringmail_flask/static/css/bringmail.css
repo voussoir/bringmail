@@ -80,7 +80,6 @@ body
         "toolbar" auto
         "hr" auto
         "messages" 1fr
-        "load_more" auto
         /1fr;
 }
 
@@ -295,12 +294,6 @@ body
     text-align: right;
     font-size: 90%;
     white-space: nowrap;
-}
-
-#load_more_button
-{
-    grid-area: load_more;
-    width: 100%;
 }
 
 /* Reader *********************************************************************/

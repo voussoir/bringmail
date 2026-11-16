@@ -34,7 +34,8 @@ Features
 - A bottom status bar reports active synchronization progress through SSE.
 - The reader panel uses theme-aware dark colors; HTML email content keeps its
   own canvas for sender styling.
-- Message lists load 500 at a time, with older messages behind "Load more".
+- Message lists load 500 at a time and automatically fetch older messages when
+  you scroll near the bottom.
 - Multiple themes.
 
 Requirements
