@@ -20,8 +20,8 @@ body
 #content_body
 {
     grid-template:
-        "left right" minmax(0, 3fr)
-        "left reader" minmax(0, 2fr)
+        "accounts messages" minmax(0, 3fr)
+        "accounts reader" minmax(0, 2fr)
         /280px 1fr;
     min-height: 0;
 }
@@ -29,7 +29,7 @@ body
 body.layout_lmr #content_body
 {
     grid-template:
-        "left right reader" minmax(0, 1fr)
+        "accounts messages reader" minmax(0, 1fr)
         /240px 34% minmax(0, 1fr);
 }
 
@@ -68,34 +68,34 @@ body.layout_lmr #content_body
     font-size: 90%;
 }
 
-#left,
-#right,
+#accounts,
+#messages,
 #reader
 {
     min-width: 0;
     min-height: 0;
 }
 
-#left
+#accounts
 {
-    grid-area: left;
+    grid-area: accounts;
     display: grid;
     grid-template:
         "toolbar" auto
         "hr" auto
-        "accounts" 1fr
+        "account_list" 1fr
         /1fr;
 }
 
-#right
+#messages
 {
-    grid-area: right;
+    grid-area: messages;
     display: grid;
     grid-template:
         "toolbar" auto
-        "hr" auto
-        "messages" 1fr
+        "message_list" 1fr
         /1fr;
+    background-color: var(--color_reader_bg);
 }
 
 #reader
@@ -113,24 +113,23 @@ body.layout_lmr #content_body
     grid-row-gap: 4px;
 }
 
-#left hr,
-#right hr
+#accounts hr
 {
     margin: 4px 0;
     border-color: var(--color_transparency);
     width: 100%;
 }
 
-#accounts,
-#messages
+#account_list,
+#message_list
 {
     overflow-x: hidden;
     overflow-y: auto;
     min-height: 0;
 }
 
-#left_toolbar,
-#right_toolbar
+#accounts_toolbar,
+#messages_toolbar
 {
     display: flex;
     flex-wrap: wrap;
@@ -138,7 +137,7 @@ body.layout_lmr #content_body
     align-items: center;
 }
 
-#right_toolbar #filter_input
+#messages_toolbar #filter_input
 {
     flex: 1 1 6em;
     min-width: 6em;
@@ -180,13 +179,13 @@ body.layout_lmr #content_body
 
 /* Accounts and folders *******************************************************/
 
-#accounts .account
+#account_list .account
 {
     margin-bottom: 2px;
 }
 
-#accounts .account_header,
-#accounts .folder
+#account_list .account_header,
+#account_list .folder
 {
     display: grid;
     grid-template-columns: 1.5em 1fr auto;
@@ -197,114 +196,139 @@ body.layout_lmr #content_body
     user-select: none;
 }
 
-#accounts .account_header:hover,
-#accounts .folder:hover
+#account_list .account_header:hover,
+#account_list .folder:hover
 {
     background-color: var(--color_secondary);
 }
 
-#accounts .account.active > .account_header,
-#accounts .folder.active
+#account_list .account.active > .account_header,
+#account_list .folder.active
 {
     background-color: var(--color_selection);
 }
 
-#accounts .folder
+#account_list .folder
 {
     line-height: 1.4em;
 }
 
-#accounts .folders
+#account_list .folders
 {
     margin-left: 1.1em;
     padding-left: 0.35em;
     border-left: 1px solid rgba(127, 127, 127, 0.35);
 }
 
-#accounts .account.collapsed .folders
+#account_list .account.collapsed .folders
 {
     display: none;
 }
 
-#accounts .icon
+#account_list .icon
 {
     text-align: center;
 }
 
-#accounts .unread_count
+#account_list .unread_count
 {
     min-width: 2em;
     text-align: right;
     font-weight: bold;
 }
 
-#accounts .refresh_spinner
+#account_list .refresh_spinner
 {
     grid-column: 3;
 }
 
 /* Message list ***************************************************************/
 
-#messages .message
+#message_list .message
 {
     display: grid;
-    grid-template-columns: 1.2em minmax(4em, 12em) minmax(0, 1fr) auto max-content;
+    grid-template:
+        "read from attachment date" auto
+        "subject subject subject subject" auto
+        / 1.2em minmax(0, 1fr) auto max-content;
     grid-column-gap: 0.5em;
+    grid-row-gap: 1px;
     align-items: baseline;
-    padding: 2px 4px;
-    line-height: 1.45em;
+    margin-bottom: 4px;
+    padding: 3px 4px;
+    border-radius: 2px;
+    background-color: var(--color_reader_bg_alt);
+    line-height: 1.35em;
     cursor: pointer;
     user-select: none;
 }
 
-#messages .message:hover
+#message_list .message:last-child
+{
+    margin-bottom: 0;
+}
+
+#message_list .message:hover
 {
     background-color: var(--color_secondary);
 }
 
-#messages .message.message_selected
+#message_list .message.message_selected
 {
     background-color: var(--color_selection) !important;
 }
 
-#messages .message .read_indicator
+#message_list .message .read_indicator
 {
+    grid-area: read;
     cursor: pointer;
     text-align: center;
     opacity: 0.25;
 }
 
-#messages .message .read_indicator:hover
+#message_list .message .read_indicator:hover
 {
     opacity: 1;
 }
 
-#messages .message.unread .read_indicator
+#message_list .message.unread .read_indicator
 {
     opacity: 1;
 }
 
-#messages .message.unread .from,
-#messages .message.unread .subject
+#message_list .message.unread .from,
+#message_list .message.unread .subject
 {
     font-weight: bold;
 }
 
-#messages .message .from,
-#messages .message .subject
+#message_list .message .from,
+#message_list .message .subject
 {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-#messages .message .attachment
+#message_list .message .from
 {
+    grid-area: from;
+}
+
+#message_list .message .subject
+{
+    grid-area: subject;
+}
+
+#message_list .message .attachment
+{
+    grid-area: attachment;
     opacity: 0.7;
 }
 
-#messages .message .date
+#message_list .message .date
 {
+    grid-area: date;
     text-align: right;
     font-size: 90%;
     white-space: nowrap;
@@ -420,33 +444,36 @@ body.layout_lmr #content_body
     #content_body
     {
         grid-template:
-            "right" minmax(300px, 45vh)
+            "messages" minmax(300px, 45vh)
             "reader" minmax(300px, 45vh)
-            "left" auto
+            "accounts" auto
             /1fr;
     }
 
     body.layout_lmr #content_body
     {
         grid-template:
-            "left" auto
-            "right" minmax(300px, 45vh)
+            "accounts" auto
+            "messages" minmax(300px, 45vh)
             "reader" minmax(300px, 45vh)
             /1fr;
     }
 
-    #left
+    #accounts
     {
         min-height: 250px;
     }
 
-    #messages .message
+    #message_list .message
     {
-        grid-template-columns: minmax(3em, 7em) minmax(0, 1fr) max-content;
+        grid-template:
+            "from date" auto
+            "subject subject" auto
+            / minmax(0, 1fr) max-content;
     }
 
-    #messages .message .read_indicator,
-    #messages .message .attachment
+    #message_list .message .read_indicator,
+    #message_list .message .attachment
     {
         display: none;
     }

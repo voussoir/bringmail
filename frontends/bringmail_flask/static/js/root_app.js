@@ -1481,8 +1481,8 @@ function figure_initial_selection() {
 }
 
 function on_pageload() {
-    accounts_element = document.getElementById("accounts");
-    messages_element = document.getElementById("messages");
+    accounts_element = document.getElementById("account_list");
+    messages_element = document.getElementById("message_list");
     filter_input = document.getElementById("filter_input");
     active_title_element = document.getElementById("active_title");
 

@@ -75,6 +75,17 @@ class FlaskTest(unittest.TestCase):
         response = self.client.get('/about')
         self.assertEqual(response.status_code, 200)
 
+    def test_root_panel_ids(self):
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        for element_id in (
+                b'accounts',
+                b'messages',
+                b'reader',
+                b'account_list',
+                b'message_list'):
+            self.assertIn(b'id="' + element_id + b'"', response.data)
+
     def test_root_has_no_flag_controls(self):
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)

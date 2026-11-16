@@ -21,8 +21,8 @@
 <body class="layout_{{layout}}">
 {{header.make_header(site=site, request=request)}}
 <div id="content_body">
-    <div id="left" class="panel">
-        <div id="left_toolbar">
+    <div id="accounts" class="panel">
+        <div id="accounts_toolbar">
             <a class="button_link" href="/account/add">+Account</a>
             <button id="refresh_all_button">Refresh all</button>
             <span id="accounts_loading_spinner" class="hidden">⌛</span>
@@ -30,13 +30,13 @@
 
         <hr/>
 
-        <div id="accounts">
+        <div id="account_list">
         <!-- Populated by root_app.js -->
         </div>
     </div>
 
-    <div id="right" class="panel">
-        <div id="right_toolbar">
+    <div id="messages" class="panel">
+        <div id="messages_toolbar">
             <button id="mark_read_button">Mark read</button>
             <button id="mark_unread_button">Mark unread</button>
             <select id="move_select" title="Move selected messages">
@@ -49,9 +49,7 @@
             <span id="active_title"></span>
         </div>
 
-        <hr/>
-
-        <div id="messages">
+        <div id="message_list">
         <!-- Populated by root_app.js -->
         </div>
     </div>
