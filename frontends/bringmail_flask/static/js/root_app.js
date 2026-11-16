@@ -59,6 +59,7 @@ let allow_images = false;
 let sse = null;
 let sse_watchdog_timeout = null;
 let dynamic_filter_timeout = null;
+let accounts_reload_timeout = null;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1134,6 +1135,27 @@ function start_sse() {
 
     sse.addEventListener("account_refresh_started", function(event) {
         accounts_spinner.show();
+    });
+
+    sse.addEventListener("account_refresh_progress", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        if (payload.stage === "folders" || payload.stage === "folder_finished") {
+            clearTimeout(accounts_reload_timeout);
+            accounts_reload_timeout = setTimeout(load_accounts, 500);
+        }
+        if (
+            payload.stage === "folder_finished" &&
+            active_kind === "folder" &&
+            String(payload.folder_id) === String(active_id) &&
+            current_message_id === null
+        ) {
+            load_messages(true);
+        }
     });
 
     sse.addEventListener("account_refresh_finished", function(event) {
