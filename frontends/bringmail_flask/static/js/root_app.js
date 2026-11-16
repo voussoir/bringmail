@@ -181,6 +181,33 @@ function load_accounts(callback) {
 function render_accounts() {
     common.delete_all_children(accounts_element);
 
+    const all_div = document.createElement("div");
+    all_div.classList.add("account", "all_accounts");
+    const all_header = document.createElement("div");
+    all_header.classList.add("account_header");
+    all_header.dataset.allAccounts = "1";
+
+    const all_icon = document.createElement("span");
+    all_icon.classList.add("icon");
+    all_icon.textContent = "📬";
+    all_header.appendChild(all_icon);
+
+    const all_title = document.createElement("span");
+    all_title.classList.add("title");
+    all_title.textContent = "All accounts";
+    all_header.appendChild(all_title);
+
+    const all_unread = document.createElement("span");
+    all_unread.classList.add("unread_count");
+    all_unread.dataset.allAccountsUnread = "1";
+    all_header.appendChild(all_unread);
+
+    all_header.addEventListener("click", function() {
+        select_all_accounts();
+    });
+    all_div.appendChild(all_header);
+    accounts_element.appendChild(all_div);
+
     for (const account of accounts_data) {
         const account_div = document.createElement("div");
         account_div.classList.add("account");
@@ -285,7 +312,9 @@ function toggle_account_collapsed(account_div, account_id) {
 }
 
 function update_unread_displays() {
+    let total_unread = 0;
     for (const account of accounts_data) {
+        total_unread += account.unread_count || 0;
         const account_span = accounts_element.querySelector(`[data-account-unread="${account.id}"]`);
         set_unread_span(account_span, account.unread_count);
         for (const folder of account.folders) {
@@ -293,6 +322,8 @@ function update_unread_displays() {
             set_unread_span(folder_span, folder.unread_count);
         }
     }
+    const all_span = accounts_element.querySelector("[data-all-accounts-unread]");
+    set_unread_span(all_span, total_unread);
 }
 
 function folder_in_account_view(folder, account) {
@@ -340,12 +371,29 @@ function update_active_classes() {
             String(account_div.dataset.accountId) === String(active_account_id)
         );
     }
+    const all_div = accounts_element.querySelector(".all_accounts");
+    if (all_div) {
+        all_div.classList.toggle("active", active_kind === "all");
+    }
     for (const folder_div of accounts_element.querySelectorAll(".folder")) {
         folder_div.classList.toggle(
             "active",
             active_kind === "folder" && String(folder_div.dataset.folderId) === String(active_id)
         );
     }
+}
+
+function select_all_accounts() {
+    active_kind = "all";
+    active_id = "all";
+    active_account_id = null;
+    active_folder_id = null;
+    history.replaceState(null, "", "/all");
+
+    update_active_classes();
+    build_move_options();
+    set_active_title("All accounts / Inbox + Sent");
+    load_messages(true);
 }
 
 function select_account(account_id) {
@@ -358,11 +406,6 @@ function select_account(account_id) {
     active_account_id = account.id;
     active_folder_id = null;
     history.replaceState(null, "", `/account/${account.id}`);
-
-    const account_div = accounts_element.querySelector(`.account[data-account-id="${account.id}"]`);
-    if (account_div && account_div.classList.contains("collapsed")) {
-        toggle_account_collapsed(account_div, account.id);
-    }
 
     update_active_classes();
     build_move_options();
@@ -486,8 +529,10 @@ function load_messages(reset) {
 
     if (active_kind === "folder") {
         messages_request = api.folders.get_messages(active_id, parameters, callback);
-    } else {
+    } else if (active_kind === "account") {
         messages_request = api.accounts.get_messages(active_id, parameters, callback);
+    } else if (active_kind === "all") {
+        messages_request = api.accounts.get_all_messages(parameters, callback);
     }
 }
 
@@ -1121,6 +1166,10 @@ function refresh_account(account_id) {
 }
 
 function refresh_active() {
+    if (active_kind === "all") {
+        refresh_all();
+        return;
+    }
     if (active_account_id !== null) {
         refresh_account(active_account_id);
     }
@@ -1363,11 +1412,13 @@ function start_sse() {
         finish_refresh_status(payload);
         load_accounts(function() {
             if (
-                active_account_id !== null &&
-                String(active_account_id) === String(payload.account_id) &&
-                current_message_id === null
+                active_kind === "all" ||
+                (active_account_id !== null &&
+                 String(active_account_id) === String(payload.account_id))
             ) {
-                load_messages(true);
+                if (current_message_id === null) {
+                    load_messages(true);
+                }
             }
         });
     });
@@ -1393,6 +1444,10 @@ function start_sse() {
 // PAGE LOAD
 
 function figure_initial_selection() {
+    if (window.location.pathname === "/all") {
+        select_all_accounts();
+        return;
+    }
     const folder_match = window.location.pathname.match(/^\/folder\/(\d+)/);
     const account_match = window.location.pathname.match(/^\/account\/(\d+)/);
 

@@ -33,9 +33,17 @@ def _pagination_args():
     return (limit, before_date, before_id)
 
 
-def _message_list_response(*, folder=None, account=None):
+def _message_list_response(*, folder=None, account=None, all_accounts=False):
     (limit, before_date, before_id) = _pagination_args()
-    if account is not None:
+    if all_accounts:
+        folder_ids = []
+        seen = set()
+        for each_account in common.bringdb.get_accounts():
+            for each_folder in each_account.get_aggregate_folders():
+                if each_folder.id not in seen:
+                    seen.add(each_folder.id)
+                    folder_ids.append(each_folder.id)
+    elif account is not None:
         folder_ids = [folder.id for folder in account.get_aggregate_folders()]
     else:
         folder_ids = None
@@ -78,6 +86,12 @@ def get_folder_messages_json(folder_id):
 def get_account_messages_json(account_id):
     account = common.get_account(account_id, response_type='json')
     return _message_list_response(account=account)
+
+
+@site.route('/all/messages.json')
+@flasktools.cached_endpoint(max_age=0, etag_function=lambda: common.bringdb.last_commit_id, max_urls=10)
+def get_all_messages_json():
+    return _message_list_response(all_accounts=True)
 
 
 @site.route('/folder/<folder_id>/refresh', methods=['POST'])

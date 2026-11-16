@@ -19,6 +19,7 @@ def favicon():
 
 
 @site.route('/')
+@site.route('/all')
 @site.route('/account/<int:account_id>')
 @site.route('/folder/<int:folder_id>')
 def get_root(account_id=None, folder_id=None):

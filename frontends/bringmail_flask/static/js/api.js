@@ -20,6 +20,18 @@ api.accounts.get_messages = function(account_id, parameters, callback) {
     });
 };
 
+api.accounts.get_all_messages = function(parameters, callback) {
+    let query = new URLSearchParams(parameters || {});
+    query = query.toString();
+    if (query) {
+        query = "?" + query;
+    }
+    return http.get({
+        url: `/all/messages.json${query}`,
+        callback: callback,
+    });
+};
+
 api.accounts.add = function(data, callback) {
     return http.post({url: "/accounts/add", data: data, callback: callback});
 };

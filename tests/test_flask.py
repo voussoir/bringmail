@@ -213,6 +213,52 @@ class FlaskTest(unittest.TestCase):
         )
         self.assertEqual(data['account']['unread_count'], 3)
 
+    def test_all_accounts_messages(self):
+        with self.db.transaction:
+            sent = self.db.add_folder(
+                account=self.account,
+                name='Sent',
+                display_name='Sent',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_SENT,
+            )
+            junk = self.db.add_folder(
+                account=self.account,
+                name='Junk',
+                display_name='Junk',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_JUNK,
+            )
+            for (folder, uid, subject) in (
+                    (sent, 1, 'sent'),
+                    (junk, 1, 'junk')):
+                self.db.add_message(
+                    account=self.account,
+                    folder=folder,
+                    uid=uid,
+                    uidvalidity=1,
+                    raw=None,
+                    meta={
+                        'subject': subject,
+                        'from': [],
+                        'to': [],
+                        'cc': [],
+                        'date_unix': 1,
+                        'message_id': f'<{subject}@example.com>',
+                        'has_attachments': False,
+                        'snippet': '',
+                    },
+                    size=0,
+                )
+
+        response = self.client.get('/all/messages.json?limit=100')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(
+            {message['subject'] for message in data['messages']},
+            {'Hello ✓', 'sent'},
+        )
+
     def test_accounts_json_hides_password(self):
         response = self.client.get('/accounts.json')
         self.assertEqual(response.status_code, 200)

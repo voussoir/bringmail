@@ -20,6 +20,7 @@ Features
   Archive, Trash).
 - Selecting an account shows INBOX and SENT plus their subfolders. Junk, Trash,
   Archive, and unrelated folders remain available as individual folders.
+- An All accounts entry combines those INBOX/SENT views across every account.
 - Incremental synchronization using UIDVALIDITY, UIDNEXT, and CONDSTORE where
   the server supports them.
 - Every message body is downloaded during refresh and stored locally, so every
