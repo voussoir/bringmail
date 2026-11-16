@@ -97,7 +97,7 @@ class FlaskTest(unittest.TestCase):
     def test_root_has_status_bar(self):
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'id="status_bar"', response.data)
+        self.assertIn(b'id="status_bar" class="panel"', response.data)
         self.assertIn(b'id="status_text"', response.data)
         self.assertIn(b'id="status_detail"', response.data)
         self.assertIn(b'id="status_timestamp"', response.data)
