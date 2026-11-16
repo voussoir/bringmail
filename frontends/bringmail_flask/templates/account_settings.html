@@ -87,6 +87,17 @@ pre.error_details
     border: 1px solid var(--color_text_normal);
     padding: 4px;
 }
+.error_header
+{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.error_header p
+{
+    margin: 0;
+}
 </style>
 </head>
 
@@ -101,8 +112,11 @@ pre.error_details
     <p>Last refresh: {{account.last_refresh|timestamp_to_8601_local}}</p>
     {% endif %}
     {% if account.last_refresh_error %}
-    <p>The last refresh attempt at {{account.last_refresh_attempt|timestamp_to_8601_local}} encountered an error:</p>
-    <pre class="error_details">{{account.last_refresh_error|trim}}</pre>
+    <div class="error_header">
+        <p>The last refresh attempt at {{account.last_refresh_attempt|timestamp_to_8601_local}} encountered an error:</p>
+        <button id="copy_error_button" type="button">Copy error</button>
+    </div>
+    <pre id="last_refresh_error" class="error_details">{{account.last_refresh_error|trim}}</pre>
     {% endif %}
     {% else %}
     <h1>Add account</h1>

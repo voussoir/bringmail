@@ -129,10 +129,66 @@ function delete_account_form(event) {
     return false;
 }
 
+function copy_last_refresh_error() {
+    const error_element = document.getElementById("last_refresh_error");
+    const button = document.getElementById("copy_error_button");
+    if (!error_element || !button) {
+        return;
+    }
+    const error_text = error_element.textContent;
+
+    function show_copied() {
+        const original = button.textContent;
+        button.textContent = "Copied";
+        setTimeout(function() {
+            button.textContent = original;
+        }, 1500);
+    }
+
+    function show_failed() {
+        const original = button.textContent;
+        button.textContent = "Copy failed";
+        setTimeout(function() {
+            button.textContent = original;
+        }, 1500);
+    }
+
+    function fallback_copy() {
+        const textarea = document.createElement("textarea");
+        textarea.value = error_text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        let copied = false;
+        try {
+            copied = document.execCommand("copy");
+        } catch (exc) {
+            copied = false;
+        }
+        textarea.remove();
+        if (copied) {
+            show_copied();
+        } else {
+            show_failed();
+        }
+    }
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(error_text).then(show_copied).catch(fallback_copy);
+    } else {
+        fallback_copy();
+    }
+}
+
 document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("save_button").addEventListener("click", save_account);
     const test_button = document.getElementById("test_button");
     if (test_button) {
         test_button.addEventListener("click", test_connection);
+    }
+    const copy_error_button = document.getElementById("copy_error_button");
+    if (copy_error_button) {
+        copy_error_button.addEventListener("click", copy_last_refresh_error);
     }
 });

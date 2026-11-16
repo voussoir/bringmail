@@ -120,6 +120,25 @@ class FlaskTest(unittest.TestCase):
             finally:
                 response.close()
 
+    def test_account_settings_copy_error(self):
+        error = (
+            'Traceback (most recent call last):\n'
+            '  File "bringmail/bringmaildb.py", line 1, in sync\n'
+            'RuntimeError: sample failure'
+        )
+        with self.db.transaction:
+            self.db.execute(
+                'UPDATE accounts SET last_refresh_error = ? WHERE id == ?',
+                [error, self.account.id],
+            )
+        self.account.last_refresh_error = error
+
+        response = self.client.get(f'/account/{self.account.id}/settings')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="copy_error_button"', response.data)
+        self.assertIn(b'id="last_refresh_error"', response.data)
+        self.assertIn(b'RuntimeError: sample failure', response.data)
+
     def test_layout_selection(self):
         response = self.client.get('/')
         self.assertIn(b'class="layout_ltb"', response.data)
