@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% import "header.html" as header %}
+    <title>{% if account %}Account settings{% else %}Add account{% endif %} - BringMail</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+    <link rel="stylesheet" href="/static/css/common.css"/>
+    {% if theme %}<link rel="stylesheet" href="/static/css/theme_{{theme}}.css">{% endif %}
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/http.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/account_settings_app.js"></script>
+
+<style>
+#content_body
+{
+    display: grid;
+    grid-auto-flow: row;
+    grid-gap: 8px;
+    align-content: start;
+    max-width: 800px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+}
+.group
+{
+    display: grid;
+    grid-auto-flow: row;
+    grid-gap: 6px;
+}
+.group label
+{
+    display: inline-block;
+    min-width: 8em;
+}
+.group input[type="text"],
+.group input[type="password"],
+.group input[type="number"]
+{
+    min-width: 22em;
+}
+#password_input
+{
+    min-width: 22em;
+}
+.buttons
+{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+#save_message
+{
+    color: green;
+}
+#save_message.error
+{
+    color: red;
+}
+table.folders
+{
+    border-collapse: collapse;
+    width: 100%;
+}
+table.folders th,
+table.folders td
+{
+    text-align: left;
+    padding: 2px 6px;
+    border-bottom: 1px solid var(--color_transparency);
+    font-size: 95%;
+}
+table.folders td.number
+{
+    text-align: right;
+}
+pre.error_details
+{
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 20em;
+    overflow-y: auto;
+    border: 1px solid var(--color_text_normal);
+    padding: 4px;
+}
+</style>
+</head>
+
+<body data-account-id="{{ account.id if account else '' }}">
+{{header.make_header(site=site, request=request)}}
+<div id="content_body">
+
+    {% if account %}
+    <h1>{{account.display_name}}</h1>
+    <p>ID: <code>{{account.id}}</code></p>
+    {% if account.last_refresh %}
+    <p>Last refresh: {{account.last_refresh|timestamp_to_8601_local}}</p>
+    {% endif %}
+    {% if account.last_refresh_error %}
+    <p>The last refresh attempt at {{account.last_refresh_attempt|timestamp_to_8601_local}} encountered an error:</p>
+    <pre class="error_details">{{account.last_refresh_error|trim}}</pre>
+    {% endif %}
+    {% else %}
+    <h1>Add account</h1>
+    {% endif %}
+
+    <div class="group panel">
+        <h2>Connection</h2>
+        <div><label>Label</label><input type="text" id="label_input" placeholder="Optional display name" value="{% if account %}{{account.label or ''}}{% endif %}"/></div>
+        <div><label>Host</label><input type="text" id="host_input" placeholder="imap.example.com" value="{{account.host if account else ''}}"/></div>
+        <div><label>Port</label><input type="number" id="port_input" min="1" max="65535" value="{{account.port if account else 993}}"/></div>
+        <div><label>SSL</label><input type="checkbox" id="ssl_input" {% if not account or account.ssl %}checked{% endif %}/></div>
+        <div><label>STARTTLS</label><input type="checkbox" id="starttls_input" {% if account and account.starttls %}checked{% endif %}/></div>
+        <div><label>Username</label><input type="text" id="username_input" autocomplete="username" value="{{account.username if account else ''}}"/></div>
+        <div>
+            <label>Password</label>
+            <input type="password" id="password_input" autocomplete="current-password" placeholder="{% if account %}Leave blank to keep the current password{% else %}Password{% endif %}"/>
+        </div>
+        <p>Passwords are stored in the local BringMail SQLite database. Use a dedicated application password where your mail provider supports them.</p>
+    </div>
+
+    <div class="group panel">
+        <h2>Refresh</h2>
+        {% set interval = account.autorefresh_interval if account else 900 %}
+        {% set hours = (interval // 3600) %}
+        {% set minutes = ((interval % 3600) // 60) %}
+        <p>Refresh this account every
+            <input type="number" id="interval_hours_input" min="0" value="{{hours}}" style="width: 4em"/> hours and
+            <input type="number" id="interval_minutes_input" min="0" max="59" value="{{minutes}}" style="width: 4em"/> minutes.
+            Set both to zero to disable automatic refresh.
+        </p>
+    </div>
+
+    <div class="buttons panel">
+        <button id="save_button">{% if account %}Save settings{% else %}Add account{% endif %}</button>
+        {% if account %}
+        <button id="test_button">Test connection</button>
+        <button id="delete_button" class="red_button button_with_confirm" data-prompt="Delete this account and its cached mail?" data-onclick="return delete_account_form(event);">Delete account</button>
+        {% endif %}
+        <a href="/">Back to mail</a>
+        <span id="save_message"></span>
+    </div>
+
+    {% if account and folders %}
+    <div class="group panel">
+        <h2>Folders</h2>
+        <table class="folders">
+            <thead>
+                <tr><th>Folder</th><th>Messages</th><th>Unread</th><th>Last sync</th></tr>
+            </thead>
+            <tbody>
+                {% for folder in folders %}
+                <tr>
+                    <td style="padding-left: {{4 + (folder.depth * 12)}}px">{{folder.label}}</td>
+                    <td class="number">{{folder.get_message_count()}}</td>
+                    <td class="number">{{folder.get_unread_count()}}</td>
+                    <td>{% if folder.last_sync %}{{folder.last_sync|timestamp_to_8601_local}}{% else %}never{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if account %}
+    <div class="group panel">
+        <p>Themes: 
+            <a href="?theme=turquoise">Turquoise</a> |
+            <a href="?theme=pearl">Pearl</a> |
+            <a href="?theme=slate">Slate</a> |
+            <a href="?theme=onyx">Onyx</a>
+        </p>
+    </div>
+    {% endif %}
+</div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# IMAP client
+imapclient
+
+# XML / HTML parsing for message bodies and sanitization
+bs4
+lxml
+
+# Date parsing helpers
+python-dateutil
+
+# Web server
+flask
+gevent
+werkzeug
+
+# My own variety toolkit (worms, flasktools, pathclass, vlogging, ...)
+voussoirkit

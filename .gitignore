@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+_bringmail/
+*.db
+*.db-shm
+*.db-wal
+
+.venv/
+venv/
+.env
+
+# Local credentials, if any are ever added outside the database.
+bringmail_credentials.py
+bringmail_credentials.json

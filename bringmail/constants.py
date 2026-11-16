@@ -1,0 +1,167 @@
+'''
+Constants and database schema for BringMail.
+
+BringMail requires SQLite 3.38.0 or newer. Generated columns were added in
+3.31.0 and the JSON functions became part of the SQLite core in 3.38.0, so
+3.38.0 is the lowest version that can run this schema without relying on a
+separately compiled JSON1 extension. See bringmail.exceptions.SQLiteTooOld.
+'''
+
+DATABASE_VERSION = 1
+
+MINIMUM_SQLITE = (3, 38, 0)
+MINIMUM_SQLITE_STRING = '.'.join(str(part) for part in MINIMUM_SQLITE)
+
+DEFAULT_DATADIR = '_bringmail'
+DEFAULT_DBNAME = 'bringmail.db'
+
+DEFAULT_AUTOREFRESH_INTERVAL = 900
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
+
+# IMAP timeouts, in seconds.
+IMAP_CONNECT_TIMEOUT = 15
+IMAP_READ_TIMEOUT = 120
+
+# Network batch sizes.
+FETCH_BATCH_HEADERS = 50
+FETCH_BATCH_FULL = 5
+FETCH_BATCH_FLAGS = 500
+FLAG_BATCH = 500
+
+# When importing a folder for the first time and more than this many messages
+# are new, fetch headers for everything first and then fill in the bodies
+# newest-first. This keeps the UI usable while a large archive downloads.
+HEADER_FIRST_THRESHOLD = 50
+
+# A single message larger than this is fetched by itself rather than in a
+# batch with its neighbors.
+LARGE_MESSAGE_BYTES = 10 * 1024 * 1024
+
+# Raw message compression codecs. 1 = zlib.
+RAW_CODEC_ZLIB = 1
+
+META_VERSION = 1
+
+SPECIAL_USE_INBOX = '\\Inbox'
+SPECIAL_USE_TRASH = '\\Trash'
+SPECIAL_USE_SENT = '\\Sent'
+SPECIAL_USE_DRAFTS = '\\Drafts'
+SPECIAL_USE_JUNK = '\\Junk'
+SPECIAL_USE_ARCHIVE = '\\Archive'
+
+SPECIAL_USES = (
+    SPECIAL_USE_INBOX,
+    SPECIAL_USE_TRASH,
+    SPECIAL_USE_SENT,
+    SPECIAL_USE_DRAFTS,
+    SPECIAL_USE_JUNK,
+    SPECIAL_USE_ARCHIVE,
+)
+
+VERSION = '0.0.1'
+
+DB_INIT = f'''
+CREATE TABLE IF NOT EXISTS accounts(
+    id INTEGER PRIMARY KEY,
+    label TEXT,
+    host TEXT NOT NULL,
+    port INT NOT NULL,
+    ssl BOOLEAN NOT NULL,
+    starttls BOOLEAN NOT NULL,
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
+    autorefresh_interval INT NOT NULL,
+    ui_order_rank REAL NOT NULL,
+    created INT NOT NULL,
+    last_refresh INT NOT NULL,
+    last_refresh_attempt INT NOT NULL,
+    last_refresh_error TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_accounts_endpoint
+    ON accounts(host, port, username);
+CREATE INDEX IF NOT EXISTS index_accounts_ui_order_rank
+    ON accounts(ui_order_rank);
+
+CREATE TABLE IF NOT EXISTS folders(
+    id INTEGER PRIMARY KEY,
+    account_id INT NOT NULL,
+    name TEXT NOT NULL,
+    display_name TEXT,
+    delimiter TEXT,
+    attributes TEXT,
+    special_use TEXT,
+    uidvalidity INT,
+    uidnext INT,
+    highestmodseq INT,
+    last_sync INT NOT NULL,
+    last_sync_error TEXT,
+    sync_enabled BOOLEAN NOT NULL,
+    ui_order_rank REAL NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_folders_account_name
+    ON folders(account_id, name);
+CREATE INDEX IF NOT EXISTS index_folders_account_rank
+    ON folders(account_id, ui_order_rank);
+
+CREATE TABLE IF NOT EXISTS messages(
+    id INTEGER PRIMARY KEY,
+    account_id INT NOT NULL,
+    folder_id INT NOT NULL,
+    uid INT NOT NULL,
+    uidvalidity INT NOT NULL,
+    raw BLOB,
+    raw_codec INT NOT NULL,
+    body_fetched BOOLEAN NOT NULL,
+    meta TEXT NOT NULL,
+    meta_version INT NOT NULL,
+    seen BOOLEAN NOT NULL,
+    flagged BOOLEAN NOT NULL,
+    answered BOOLEAN NOT NULL,
+    imap_deleted BOOLEAN NOT NULL,
+    draft BOOLEAN NOT NULL,
+    keywords TEXT,
+    modseq INT,
+    size INT,
+    subject TEXT GENERATED ALWAYS AS (json_extract(meta, '$.subject')) VIRTUAL,
+    from_name TEXT GENERATED ALWAYS AS (json_extract(meta, '$.from[0].name')) VIRTUAL,
+    from_addr TEXT GENERATED ALWAYS AS (json_extract(meta, '$.from[0].addr')) VIRTUAL,
+    date_unix INT GENERATED ALWAYS AS (json_extract(meta, '$.date_unix')) VIRTUAL,
+    message_id TEXT GENERATED ALWAYS AS (json_extract(meta, '$.message_id')) VIRTUAL,
+    has_attachments INT GENERATED ALWAYS AS (json_extract(meta, '$.has_attachments')) VIRTUAL,
+    FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE CASCADE,
+    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_messages_folder_uid
+    ON messages(folder_id, uid);
+CREATE INDEX IF NOT EXISTS index_messages_folder_date
+    ON messages(folder_id, date_unix DESC);
+CREATE INDEX IF NOT EXISTS index_messages_account_date
+    ON messages(account_id, date_unix DESC);
+CREATE INDEX IF NOT EXISTS index_messages_folder_seen
+    ON messages(folder_id, seen);
+CREATE INDEX IF NOT EXISTS index_messages_folder_flagged
+    ON messages(folder_id, flagged);
+CREATE INDEX IF NOT EXISTS index_messages_account_message_id
+    ON messages(account_id, message_id);
+'''
+
+
+# Settings used by the network connection. These are applied to both sqlite
+# connections in bringmaildb._load_pragmas.
+READ_PRAGMAS = {
+    'busy_timeout': 5000,
+    'cache_size': -50000,
+    'foreign_keys': 'on',
+    'query_only': 'on',
+}
+
+WRITE_PRAGMAS = {
+    'busy_timeout': 5000,
+    'cache_size': -50000,
+    'foreign_keys': 'on',
+    'journal_mode': 'wal',
+    'synchronous': 'normal',
+    'temp_store': 'memory',
+}

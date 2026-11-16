@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% import "header.html" as header %}
+    <title>BringMail</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+    <link rel="stylesheet" href="/static/css/common.css"/>
+    <link rel="stylesheet" href="/static/css/bringmail.css"/>
+    {% if theme %}<link rel="stylesheet" href="/static/css/theme_{{theme}}.css">{% endif %}
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/http.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/spinners.js"></script>
+    <script src="/static/js/hotkeys.js"></script>
+    <script src="/static/js/contextmenus.js"></script>
+    <script src="/static/js/root_app.js"></script>
+</head>
+
+<body>
+{{header.make_header(site=site, request=request)}}
+<div id="content_body">
+    <div id="left" class="panel">
+        <div id="left_toolbar">
+            <a class="button_link" href="/account/add">+Account</a>
+            <button id="refresh_all_button">Refresh all</button>
+            <span id="accounts_loading_spinner" class="hidden">⌛</span>
+        </div>
+
+        <hr/>
+
+        <div id="accounts">
+        <!-- Populated by root_app.js -->
+        </div>
+    </div>
+
+    <div id="right" class="panel">
+        <div id="right_toolbar">
+            <button id="mark_read_button">Mark read</button>
+            <button id="mark_unread_button">Mark unread</button>
+            <button id="flag_button">Flag</button>
+            <button id="unflag_button">Unflag</button>
+            <select id="move_select" title="Move selected messages">
+                <option value="">Move to...</option>
+            </select>
+            <button id="delete_button">Delete</button>
+            <button id="refresh_folder_button">Refresh</button>
+            <span id="news_loading_spinner" class="hidden">⌛</span>
+            <input type="text" id="filter_input" placeholder="filter" autocomplete="off"/>
+            <span id="active_title"></span>
+        </div>
+
+        <hr/>
+
+        <div id="messages">
+        <!-- Populated by root_app.js -->
+        </div>
+        <button id="load_more_button" class="hidden">Load more</button>
+    </div>
+
+    <div id="reader" class="panel">
+        <h2><span id="reader_subject"></span></h2>
+        <div id="reader_meta"></div>
+        <div id="reader_buttons">
+            <button id="reader_html_button" class="hidden">HTML</button>
+            <button id="reader_text_button" class="hidden">Plain text</button>
+            <button id="reader_images_button" class="hidden">Load images</button>
+            <button id="reader_headers_button" class="hidden">Headers</button>
+            <span id="reader_loading_spinner" class="hidden">⌛</span>
+        </div>
+        <div id="reader_attachments"></div>
+        <div id="reader_body">
+            <iframe id="reader_iframe" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+            <pre id="reader_plain" class="hidden"></pre>
+            <pre id="reader_headers" class="hidden"></pre>
+        </div>
+    </div>
+
+    <div id="mail_contextmenu" class="contextmenu">
+        <b id="context_title"></b>
+        <button id="context_refresh_button">Refresh</button>
+        <a id="context_settings_link" href="#">Account settings</a>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% import "header.html" as header %}
+    <title>About BringMail</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+    <link rel="stylesheet" href="/static/css/common.css"/>
+    {% if theme %}<link rel="stylesheet" href="/static/css/theme_{{theme}}.css">{% endif %}
+</head>
+
+<body>
+{{header.make_header(site=site, request=request)}}
+<div id="content_body">
+    <div class="panel">
+        <h1>BringMail</h1>
+        <p>BringMail is a local IMAP mail reader with a three-panel layout and an offline cache. All messages are downloaded into a local SQLite database, so folders you have already synced can be browsed without a network connection.</p>
+        <p>Every account has its own refresh interval. The left panel lists accounts and folders, the upper-right panel lists messages, and the lower-right panel shows the selected message.</p>
+        <p>HTML mail is sanitized and displayed inside a sandboxed iframe. Remote images are blocked until you click "Load images".</p>
+        <p>Themes:</p>
+        <p>
+            <a href="?theme=turquoise">Turquoise</a> |
+            <a href="?theme=pearl">Pearl</a> |
+            <a href="?theme=slate">Slate</a> |
+            <a href="?theme=onyx">Onyx</a> |
+            <a href="?theme=">Default</a>
+        </p>
+        <p><a href="/">Back to mail</a></p>
+    </div>
+</div>
+</body>
+</html>

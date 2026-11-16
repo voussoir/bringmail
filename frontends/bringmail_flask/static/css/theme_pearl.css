@@ -1,0 +1,16 @@
+:root
+{
+    --color_primary: #f6ffff;
+    --color_secondary: #aad7ff;
+
+    --color_text_normal: black;
+    --color_text_link: #00f;
+
+    --color_textfields: white;
+    --color_text_placeholder: gray;
+
+    --color_selection: rgba(229, 126, 200, 0.7);
+    --color_transparency: rgba(0, 0, 0, 0.1);
+    --color_shadow: rgba(0, 0, 0, 0.5);
+    --color_highlight: rgba(255, 255, 255, 0.5);
+}

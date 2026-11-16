@@ -1,0 +1,398 @@
+/* Layout specific to the three-panel mail interface. */
+
+html,
+body
+{
+    height: 100vh;
+    max-height: 100vh;
+}
+
+body
+{
+    grid-template:
+        "header" auto
+        "content_body" 1fr
+        /1fr;
+    overflow: hidden;
+}
+
+#content_body
+{
+    grid-template:
+        "left right" minmax(0, 3fr)
+        "left reader" minmax(0, 2fr)
+        /280px 1fr;
+    min-height: 0;
+}
+
+#left,
+#right,
+#reader
+{
+    min-width: 0;
+    min-height: 0;
+}
+
+#left
+{
+    grid-area: left;
+    display: grid;
+    grid-template:
+        "toolbar" auto
+        "hr" auto
+        "accounts" 1fr
+        /1fr;
+}
+
+#right
+{
+    grid-area: right;
+    display: grid;
+    grid-template:
+        "toolbar" auto
+        "hr" auto
+        "messages" 1fr
+        "load_more" auto
+        /1fr;
+}
+
+#reader
+{
+    grid-area: reader;
+    position: relative;
+    display: grid;
+    grid-template:
+        "header" auto
+        "meta" auto
+        "buttons" auto
+        "attachments" auto
+        "body" 1fr
+        /1fr;
+    grid-row-gap: 4px;
+}
+
+#left hr,
+#right hr
+{
+    margin: 4px 0;
+    border-color: var(--color_transparency);
+    width: 100%;
+}
+
+#accounts,
+#messages
+{
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+#left_toolbar,
+#right_toolbar
+{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+#right_toolbar #filter_input
+{
+    flex: 1 1 6em;
+    min-width: 6em;
+}
+
+#active_title
+{
+    margin-left: auto;
+    font-weight: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.button_link
+{
+    display: inline-block;
+    padding: 1px 6px;
+    border: 1px solid var(--color_text_normal);
+    border-radius: 3px;
+    text-decoration: none;
+}
+
+.refresh_error
+{
+    color: #ff6b6b;
+}
+
+.empty_message
+{
+    padding: 10px;
+    opacity: 0.7;
+}
+
+#reader_meta
+{
+    white-space: pre-wrap;
+}
+
+/* Accounts and folders *******************************************************/
+
+#accounts .account
+{
+    margin-bottom: 2px;
+}
+
+#accounts .account_header,
+#accounts .folder
+{
+    display: grid;
+    grid-template-columns: 1.5em 1fr auto;
+    grid-column-gap: 0.4em;
+    align-items: center;
+    padding: 1px 2px;
+    cursor: pointer;
+    user-select: none;
+}
+
+#accounts .account_header:hover,
+#accounts .folder:hover
+{
+    background-color: var(--color_secondary);
+}
+
+#accounts .account.active > .account_header,
+#accounts .folder.active
+{
+    background-color: var(--color_selection);
+}
+
+#accounts .folder
+{
+    line-height: 1.4em;
+}
+
+#accounts .account.collapsed .folders
+{
+    display: none;
+}
+
+#accounts .icon
+{
+    text-align: center;
+}
+
+#accounts .unread_count
+{
+    min-width: 2em;
+    text-align: right;
+    font-weight: bold;
+}
+
+#accounts .refresh_spinner
+{
+    grid-column: 3;
+}
+
+/* Message list ***************************************************************/
+
+#messages .message
+{
+    display: grid;
+    grid-template-columns: 1.2em 1.2em minmax(5em, 12em) 1fr auto 7.5em 4.5em;
+    grid-column-gap: 0.5em;
+    align-items: baseline;
+    padding: 2px 4px;
+    line-height: 1.45em;
+    cursor: pointer;
+    user-select: none;
+}
+
+#messages .message:hover
+{
+    background-color: var(--color_secondary);
+}
+
+#messages .message.message_selected
+{
+    background-color: var(--color_selection) !important;
+}
+
+#messages .message .flag
+{
+    cursor: pointer;
+    opacity: 0.35;
+    text-align: center;
+}
+
+#messages .message .flag.flagged
+{
+    opacity: 1;
+    color: #ffd700;
+}
+
+#messages .message .read_indicator
+{
+    text-align: center;
+    opacity: 0.25;
+}
+
+#messages .message.unread .read_indicator
+{
+    opacity: 1;
+}
+
+#messages .message.unread .from,
+#messages .message.unread .subject
+{
+    font-weight: bold;
+}
+
+#messages .message .from,
+#messages .message .subject
+{
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#messages .message .attachment
+{
+    opacity: 0.7;
+}
+
+#messages .message .date,
+#messages .message .size
+{
+    text-align: right;
+    font-size: 90%;
+    white-space: nowrap;
+}
+
+#load_more_button
+{
+    grid-area: load_more;
+    width: 100%;
+}
+
+/* Reader *********************************************************************/
+
+#reader
+{
+    overflow: hidden;
+}
+
+#reader > h2
+{
+    grid-area: header;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#reader_meta
+{
+    grid-area: meta;
+    font-size: 90%;
+    overflow-wrap: anywhere;
+}
+
+#reader_buttons
+{
+    grid-area: buttons;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+#reader_attachments
+{
+    grid-area: attachments;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+#reader_attachments a
+{
+    border: 1px solid var(--color_text_normal);
+    border-radius: 3px;
+    padding: 1px 4px;
+    text-decoration: none;
+}
+
+#reader_body
+{
+    grid-area: body;
+    position: relative;
+    min-height: 0;
+    background-color: #fff;
+    color: #111;
+    border-radius: 3px;
+    overflow: auto;
+}
+
+#reader_iframe
+{
+    display: block;
+    width: 100%;
+    min-height: 200px;
+    border: 0;
+    background-color: #fff;
+}
+
+#reader_plain,
+#reader_headers
+{
+    margin: 0;
+    padding: 8px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: #111;
+}
+
+#reader_loading_spinner
+{
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    z-index: 2;
+}
+
+@media screen and (max-width: 800px)
+{
+    html,
+    body
+    {
+        height: auto;
+        max-height: none;
+        overflow: auto;
+    }
+
+    #content_body
+    {
+        grid-template:
+            "right" minmax(300px, 45vh)
+            "reader" minmax(300px, 45vh)
+            "left" auto
+            /1fr;
+    }
+
+    #left
+    {
+        min-height: 250px;
+    }
+
+    #messages .message
+    {
+        grid-template-columns: 1.2em 1.2em 1fr 5.5em;
+    }
+
+    #messages .message .attachment,
+    #messages .message .size
+    {
+        display: none;
+    }
+}
