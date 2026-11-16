@@ -2,6 +2,8 @@
 
 :root
 {
+    --font_sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
     --color_primary: #222;
     --color_secondary: #3b4d5d;
     --color_text_normal: #efefef;
@@ -12,6 +14,13 @@
     --color_text_placeholder: gray;
     --color_shadow: rgba(0, 0, 0, 0.5);
     --color_highlight: rgba(255, 255, 255, 0.5);
+
+    --color_reader_bg: #1c2228;
+    --color_reader_bg_alt: #242c34;
+    --color_reader_text: #e7edf3;
+    --color_reader_text_muted: #aab6c1;
+    --color_reader_link: #79dfff;
+    --color_reader_border: #3b4d5d;
 }
 
 html
@@ -19,6 +28,15 @@ html
     min-height: 100vh;
     box-sizing: border-box;
     color: var(--color_text_normal);
+    font-family: var(--font_sans);
+}
+
+button,
+input,
+select,
+textarea
+{
+    font: inherit;
 }
 
 *, *:before, *:after

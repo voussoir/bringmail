@@ -13,4 +13,11 @@
     --color_transparency: rgba(0, 0, 0, 0.1);
     --color_shadow: rgba(0, 0, 0, 0.5);
     --color_highlight: rgba(255, 255, 255, 0.5);
+
+    --color_reader_bg: #eef9ff;
+    --color_reader_bg_alt: #ffffff;
+    --color_reader_text: #111111;
+    --color_reader_text_muted: #4a5a66;
+    --color_reader_link: #0050b3;
+    --color_reader_border: #aad7ff;
 }

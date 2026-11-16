@@ -12,6 +12,7 @@ body
     grid-template:
         "header" auto
         "content_body" 1fr
+        "status_bar" auto
         /1fr;
     overflow: hidden;
 }
@@ -23,6 +24,33 @@ body
         "left reader" minmax(0, 2fr)
         /280px 1fr;
     min-height: 0;
+}
+
+#status_bar
+{
+    grid-area: status_bar;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+    padding: 2px 8px;
+    overflow: hidden;
+    border-top: 1px solid rgba(127, 127, 127, 0.35);
+    background-color: var(--color_transparency);
+    font-size: 90%;
+    white-space: nowrap;
+}
+
+#status_text
+{
+    font-weight: bold;
+}
+
+#status_detail
+{
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.8;
 }
 
 #left,
@@ -227,8 +255,14 @@ body
 
 #messages .message .read_indicator
 {
+    cursor: pointer;
     text-align: center;
     opacity: 0.25;
+}
+
+#messages .message .read_indicator:hover
+{
+    opacity: 1;
 }
 
 #messages .message.unread .read_indicator
@@ -274,6 +308,8 @@ body
 #reader
 {
     overflow: hidden;
+    background-color: var(--color_reader_bg);
+    color: var(--color_reader_text);
 }
 
 #reader > h2
@@ -289,6 +325,7 @@ body
 {
     grid-area: meta;
     font-size: 90%;
+    color: var(--color_reader_text_muted);
     overflow-wrap: anywhere;
 }
 
@@ -311,9 +348,10 @@ body
 
 #reader_attachments a
 {
-    border: 1px solid var(--color_text_normal);
+    border: 1px solid var(--color_reader_border);
     border-radius: 3px;
     padding: 1px 4px;
+    color: var(--color_reader_link);
     text-decoration: none;
 }
 
@@ -322,8 +360,8 @@ body
     grid-area: body;
     position: relative;
     min-height: 0;
-    background-color: #fff;
-    color: #111;
+    background-color: var(--color_reader_bg_alt);
+    color: var(--color_reader_text);
     border-radius: 3px;
     overflow: auto;
 }
@@ -344,12 +382,12 @@ body
     padding: 8px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    color: #111;
+    color: var(--color_reader_text);
+    font-family: inherit;
 }
 
 #reader_plain
 {
-    font-family: inherit;
     line-height: 1.5;
 }
 
@@ -395,5 +433,12 @@ body
     #messages .message .size
     {
         display: none;
+    }
+
+    #status_bar
+    {
+        position: sticky;
+        bottom: 0;
+        z-index: 3;
     }
 }

@@ -83,6 +83,14 @@ class FlaskTest(unittest.TestCase):
         self.assertNotIn(b'>Flag<', response.data)
         self.assertNotIn(b'>Unflag<', response.data)
 
+    def test_root_has_status_bar(self):
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="status_bar"', response.data)
+        self.assertIn(b'id="status_text"', response.data)
+        self.assertIn(b'id="status_detail"', response.data)
+        self.assertIn(b'id="reader_iframe" class="hidden"', response.data)
+
     def test_account_settings_pages(self):
         response = self.client.get('/account/add')
         self.assertEqual(response.status_code, 200)

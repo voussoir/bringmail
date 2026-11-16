@@ -62,6 +62,10 @@ let sse = null;
 let sse_watchdog_timeout = null;
 let dynamic_filter_timeout = null;
 let accounts_reload_timeout = null;
+let status_text_element = null;
+let status_detail_element = null;
+let status_spinner = null;
+let refresh_status = null;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -491,7 +495,8 @@ function create_message_row(message) {
     const read_indicator = document.createElement("span");
     read_indicator.classList.add("read_indicator");
     read_indicator.textContent = "●";
-    read_indicator.title = "Unread";
+    read_indicator.title = message.seen ? "Mark unread" : "Mark read";
+    read_indicator.setAttribute("role", "button");
     row.appendChild(read_indicator);
 
     const from = document.createElement("span");
@@ -597,6 +602,16 @@ function select_range(message_id) {
 }
 
 function on_messages_click(event) {
+    if (event.target.classList.contains("read_indicator")) {
+        const dot_row = event.target.closest(".message");
+        if (!dot_row) {
+            return;
+        }
+        event.stopPropagation();
+        toggle_message_seen(dot_row.dataset.id);
+        return;
+    }
+
     const row = event.target.closest(".message");
     if (!row) {
         return;
@@ -618,6 +633,21 @@ function on_messages_click(event) {
     }
 }
 
+function toggle_message_seen(message_id) {
+    const message = find_message(message_id);
+    if (!message) {
+        return;
+    }
+    const seen = !message.seen;
+    api.messages.set_seen(message.id, seen, function(response) {
+        if (!api_was_ok(response)) {
+            show_api_error(response);
+            return;
+        }
+        set_seen_local(message.id, seen);
+    });
+}
+
 function set_seen_local(message_id, seen) {
     const message = find_message(message_id);
     const row = message_row(message_id);
@@ -628,6 +658,10 @@ function set_seen_local(message_id, seen) {
     message.seen = seen;
     if (row) {
         row.classList.toggle("unread", !seen);
+        const indicator = row.querySelector(".read_indicator");
+        if (indicator) {
+            indicator.title = seen ? "Mark unread" : "Mark read";
+        }
     }
     if (was_unread && seen) {
         adjust_unread(message.folder_id, -1);
@@ -700,6 +734,7 @@ function clear_reader() {
     common.delete_all_children(reader_attachments);
     reader_iframe.srcdoc = "";
     reader_iframe.style.height = "";
+    reader_iframe.classList.add("hidden");
     reader_plain.textContent = "";
     reader_headers.textContent = "";
     reader_plain.classList.add("hidden");
@@ -729,6 +764,7 @@ function show_reader(message_id) {
     common.delete_all_children(reader_attachments);
     reader_iframe.srcdoc = "";
     reader_iframe.style.height = "";
+    reader_iframe.classList.add("hidden");
     reader_plain.textContent = "";
     reader_headers.textContent = "";
     reader_plain.classList.add("hidden");
@@ -1093,6 +1129,139 @@ function show_account_contextmenu(event, kind, id, account_id, title) {
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// STATUS BAR
+
+function status_account_name(account_id) {
+    const account = find_account(account_id);
+    if (account) {
+        return account.display_name || account.label || `Account ${account_id}`;
+    }
+    return `Account ${account_id}`;
+}
+
+function status_detail_for(state) {
+    if (!state) {
+        return "";
+    }
+    if (state.stage === "folders") {
+        return state.total ? `Discovering folders (${state.total})` : "Discovering folders…";
+    }
+    if (state.stage === "folder_start") {
+        return `Folder ${state.index + 1}/${state.total}: ${state.folder_name}`;
+    }
+    if (state.stage === "headers" || state.stage === "bodies") {
+        const label = state.stage === "headers" ? "Headers" : "Messages";
+        return `${label}: ${state.folder_name} (${state.done}/${state.total})`;
+    }
+    if (state.stage === "folder_finished") {
+        return `Finished ${state.folder_name}`;
+    }
+    if (state.stage === "error") {
+        return "See account settings for details.";
+    }
+    if (state.stage === "finished") {
+        return "Sync complete.";
+    }
+    return "Preparing account…";
+}
+
+function render_status_bar() {
+    if (!status_text_element) {
+        return;
+    }
+    if (!refresh_status) {
+        status_text_element.textContent = "Idle";
+        status_detail_element.textContent = "";
+        status_spinner.hide();
+        return;
+    }
+    if (refresh_status.error) {
+        status_text_element.textContent = `Sync error: ${refresh_status.name}`;
+        status_detail_element.textContent = status_detail_for(refresh_status);
+        status_spinner.hide();
+        return;
+    }
+    status_text_element.textContent = `Syncing ${refresh_status.name}`;
+    status_detail_element.textContent = status_detail_for(refresh_status);
+    status_spinner.show();
+}
+
+function begin_refresh_status(account) {
+    refresh_status = {
+        account_id: account.id,
+        name: account.display_name || account.label || `Account ${account.id}`,
+        stage: "starting",
+        folder_name: "",
+        done: 0,
+        total: 0,
+        index: 0,
+        error: null,
+    };
+    render_status_bar();
+}
+
+function update_refresh_status(payload) {
+    if (
+        !refresh_status ||
+        String(refresh_status.account_id) !== String(payload.account_id)
+    ) {
+        refresh_status = {
+            account_id: payload.account_id,
+            name: status_account_name(payload.account_id),
+            stage: "starting",
+            folder_name: "",
+            done: 0,
+            total: 0,
+            index: 0,
+            error: null,
+        };
+    }
+    refresh_status.stage = payload.stage || refresh_status.stage;
+    if (payload.folder_name) {
+        refresh_status.folder_name = payload.folder_name;
+    }
+    if (payload.index !== undefined) {
+        refresh_status.index = payload.index;
+    }
+    if (payload.total !== undefined) {
+        refresh_status.total = payload.total;
+    }
+    if (payload.done !== undefined) {
+        refresh_status.done = payload.done;
+    }
+    render_status_bar();
+}
+
+function finish_refresh_status(payload) {
+    if (
+        !refresh_status ||
+        String(refresh_status.account_id) !== String(payload.account_id)
+    ) {
+        refresh_status = {
+            account_id: payload.account_id,
+            name: status_account_name(payload.account_id),
+            stage: "finished",
+            folder_name: "",
+            done: 0,
+            total: 0,
+            index: 0,
+            error: null,
+        };
+    }
+    refresh_status.error = payload.error || null;
+    refresh_status.stage = payload.error ? "error" : "finished";
+    render_status_bar();
+}
+
+function finish_refresh_queue() {
+    if (refresh_status && !refresh_status.error) {
+        refresh_status = null;
+    }
+    render_status_bar();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // SSE
 
 function start_sse() {
@@ -1103,6 +1272,13 @@ function start_sse() {
 
     sse.addEventListener("account_refresh_started", function(event) {
         accounts_spinner.show();
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        begin_refresh_status(payload);
     });
 
     sse.addEventListener("account_refresh_progress", function(event) {
@@ -1112,6 +1288,7 @@ function start_sse() {
         } catch (exc) {
             return;
         }
+        update_refresh_status(payload);
         if (payload.stage === "folders" || payload.stage === "folder_finished") {
             clearTimeout(accounts_reload_timeout);
             accounts_reload_timeout = setTimeout(load_accounts, 500);
@@ -1131,6 +1308,7 @@ function start_sse() {
         if (payload.error) {
             console.warn(payload.error);
         }
+        finish_refresh_status(payload);
         load_accounts(function() {
             if (
                 active_account_id !== null &&
@@ -1144,6 +1322,7 @@ function start_sse() {
 
     sse.addEventListener("account_refresh_queue_finished", function() {
         accounts_spinner.hide();
+        finish_refresh_queue();
         load_accounts(function() {
             if (active_kind !== null && current_message_id === null) {
                 load_messages(true);
@@ -1204,6 +1383,9 @@ function on_pageload() {
     accounts_spinner = new spinners.Spinner(document.getElementById("accounts_loading_spinner"));
     news_spinner = new spinners.Spinner(document.getElementById("news_loading_spinner"));
     reader_spinner = new spinners.Spinner(document.getElementById("reader_loading_spinner"));
+    status_spinner = new spinners.Spinner(document.getElementById("status_spinner"));
+    status_text_element = document.getElementById("status_text");
+    status_detail_element = document.getElementById("status_detail");
 
     reader_subject = document.getElementById("reader_subject");
     reader_meta = document.getElementById("reader_meta");

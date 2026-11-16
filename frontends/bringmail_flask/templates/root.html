@@ -69,7 +69,7 @@
         </div>
         <div id="reader_attachments"></div>
         <div id="reader_body">
-            <iframe id="reader_iframe" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+            <iframe id="reader_iframe" class="hidden" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
             <pre id="reader_plain" class="hidden"></pre>
             <pre id="reader_headers" class="hidden"></pre>
         </div>
@@ -80,6 +80,11 @@
         <button id="context_refresh_button">Refresh</button>
         <a id="context_settings_link" href="#">Account settings</a>
     </div>
+</div>
+<div id="status_bar" aria-live="polite">
+    <span id="status_spinner" class="hidden">⌛</span>
+    <span id="status_text">Idle</span>
+    <span id="status_detail"></span>
 </div>
 </body>
 </html>
