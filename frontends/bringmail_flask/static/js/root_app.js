@@ -65,6 +65,7 @@ let dynamic_filter_timeout = null;
 let accounts_reload_timeout = null;
 let status_text_element = null;
 let status_detail_element = null;
+let status_timestamp_element = null;
 let status_spinner = null;
 let refresh_status = null;
 
@@ -1191,10 +1192,18 @@ function status_detail_for(state) {
     return "Preparing account…";
 }
 
+function update_status_timestamp() {
+    if (!status_timestamp_element) {
+        return;
+    }
+    status_timestamp_element.textContent = new Date().toLocaleString();
+}
+
 function render_status_bar() {
     if (!status_text_element) {
         return;
     }
+    update_status_timestamp();
     if (!refresh_status) {
         status_text_element.textContent = "Idle";
         status_detail_element.textContent = "";
@@ -1428,6 +1437,8 @@ function on_pageload() {
     status_spinner = new spinners.Spinner(document.getElementById("status_spinner"));
     status_text_element = document.getElementById("status_text");
     status_detail_element = document.getElementById("status_detail");
+    status_timestamp_element = document.getElementById("status_timestamp");
+    update_status_timestamp();
 
     reader_subject = document.getElementById("reader_subject");
     reader_meta = document.getElementById("reader_meta");
