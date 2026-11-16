@@ -112,6 +112,7 @@ def post_accounts_add():
         except sqlite3.IntegrityError:
             return _invalid(f'An account for {username} at {host}:{port} already exists.')
 
+    common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
 
 
@@ -169,6 +170,10 @@ def post_account_update(account_id):
         account.__reinit__()
         return _invalid('Another account already uses that host, port, and username.')
 
+    # Log out any reusable session that was created with the old credentials.
+    bringmail.helpers.drop_imap_session(account.id)
+    common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
+
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
 
 
@@ -177,6 +182,8 @@ def post_account_delete(account_id):
     account = common.get_account(account_id, response_type='json')
     with common.bringdb.transaction:
         account.delete()
+    bringmail.helpers.drop_imap_session(account.id)
+    common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
     return flasktools.json_response({})
 
 

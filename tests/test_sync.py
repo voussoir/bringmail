@@ -142,6 +142,28 @@ class SyncTest(unittest.TestCase):
         self.assertFalse(by_uid[2].seen)
         self.assertFalse(by_uid[3].seen)
 
+    def test_header_first_import(self):
+        client = FakeIMAPClient({1: self.raw, 2: self.raw})
+        with mock.patch.object(constants, 'HEADER_FIRST_THRESHOLD', 1):
+            self.assertIsNone(self.sync(client))
+
+        header_calls = [
+            data for (uids, data, modifiers) in client.fetch_calls
+            if 'BODY.PEEK[HEADER]' in data
+        ]
+        body_calls = [
+            data for (uids, data, modifiers) in client.fetch_calls
+            if 'BODY.PEEK[]' in data
+        ]
+        self.assertTrue(header_calls)
+        self.assertTrue(body_calls)
+
+        folder = self.get_folder()
+        messages = self.db.get_messages(folder=folder, limit=10)
+        self.assertEqual(len(messages), 2)
+        self.assertTrue(all(message.body_fetched for message in messages))
+        self.assertTrue(all(message.raw is not None for message in messages))
+
     def test_uidvalidity_reset(self):
         client = FakeIMAPClient({1: self.raw, 2: self.raw})
         self.assertIsNone(self.sync(client))

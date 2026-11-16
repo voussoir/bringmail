@@ -11,6 +11,8 @@ import imapclient
 import json
 import lxml.html
 import re
+import threading
+import time
 import typing
 
 from . import constants
@@ -688,6 +690,113 @@ def enable_condstore(client):
     return True
 
 
+# Authenticated sessions are kept open across message actions so that clicking
+# through a mailbox does not perform a full IMAP login for every read / flag /
+# move. Sync itself uses its own short-lived connection.
+_IMAP_SESSIONS = {}
+_IMAP_SESSION_LOCKS = {}
+_IMAP_SESSIONS_LOCK = threading.Lock()
+
+
+def _imap_session_key(account):
+    return (
+        account.host,
+        account.port,
+        bool(account.ssl),
+        bool(account.starttls),
+        account.username,
+        account.password,
+    )
+
+
+def _imap_session_lock(account_id):
+    with _IMAP_SESSIONS_LOCK:
+        lock = _IMAP_SESSION_LOCKS.get(account_id)
+        if lock is None:
+            lock = threading.RLock()
+            _IMAP_SESSION_LOCKS[account_id] = lock
+        return lock
+
+
+def drop_imap_session(account_id):
+    lock = _imap_session_lock(account_id)
+    with lock:
+        with _IMAP_SESSIONS_LOCK:
+            entry = _IMAP_SESSIONS.pop(account_id, None)
+        if entry is not None:
+            try:
+                entry['client'].logout()
+            except Exception:
+                try:
+                    entry['client'].shutdown()
+                except Exception:
+                    pass
+
+
+def imap_call(account, function):
+    '''
+    Run function(client) on a reusable authenticated connection for this
+    account. The per-account lock serializes operations on that connection;
+    different accounts can still operate in parallel.
+
+    If the operation raises, the session is discarded so the next call starts
+    with a fresh login. We deliberately do not retry inside this function,
+    because retrying a MOVE or STORE after an ambiguous network failure could
+    apply it twice.
+    '''
+    lock = _imap_session_lock(account.id)
+    with lock:
+        client = None
+        stale = None
+        last_used = 0
+        with _IMAP_SESSIONS_LOCK:
+            entry = _IMAP_SESSIONS.get(account.id)
+            if entry is not None and entry['key'] != _imap_session_key(account):
+                stale = _IMAP_SESSIONS.pop(account.id)
+                entry = None
+            if entry is not None:
+                client = entry['client']
+                last_used = entry.get('last_used', 0)
+
+        if stale is not None:
+            try:
+                stale['client'].logout()
+            except Exception:
+                pass
+
+        if client is not None:
+            # A long-idle connection may already be dead. NOOP before we
+            # attempt a real action so a stale socket does not surface as a
+            # failed read or flag change.
+            if time.monotonic() - last_used > 60:
+                try:
+                    client.noop()
+                except Exception:
+                    drop_imap_session(account.id)
+                    client = None
+
+        if client is None:
+            client = connect_imap(account)
+            with _IMAP_SESSIONS_LOCK:
+                _IMAP_SESSIONS[account.id] = {
+                    'key': _imap_session_key(account),
+                    'client': client,
+                    'last_used': time.monotonic(),
+                }
+
+        try:
+            result = function(client)
+        except Exception:
+            drop_imap_session(account.id)
+            raise
+
+        with _IMAP_SESSIONS_LOCK:
+            entry = _IMAP_SESSIONS.get(account.id)
+            if entry is not None and entry['client'] is client:
+                entry['last_used'] = time.monotonic()
+        return result
+
+
 def decode_flag(flag):
     if isinstance(flag, bytes):
         return flag.decode('ascii', 'replace')
@@ -700,7 +809,7 @@ def flags_to_booleans(flags):
         'seen': '\\Seen' in flags,
         'flagged': '\\Flagged' in flags,
         'answered': '\\Answered' in flags,
-        'deleted': '\\Deleted' in flags,
+        'imap_deleted': '\\Deleted' in flags,
         'draft': '\\Draft' in flags,
     }
 
@@ -710,10 +819,29 @@ def booleans_to_flags(**booleans):
         'seen': b'\\Seen',
         'flagged': b'\\Flagged',
         'answered': b'\\Answered',
-        'deleted': b'\\Deleted',
+        'imap_deleted': b'\\Deleted',
         'draft': b'\\Draft',
     }
     return [flag for (name, flag) in mapping.items() if booleans.get(name)]
+
+
+POPULAR_SPECIAL_FOLDER_NAMES = {
+    constants.SPECIAL_USE_TRASH: {
+        'trash', 'deleted', 'deleted items', 'deleted messages', 'bin',
+    },
+    constants.SPECIAL_USE_SENT: {
+        'sent', 'sent items', 'sent messages', 'sent mail',
+    },
+    constants.SPECIAL_USE_DRAFTS: {
+        'drafts', 'draft',
+    },
+    constants.SPECIAL_USE_JUNK: {
+        'junk', 'spam', 'bulk mail',
+    },
+    constants.SPECIAL_USE_ARCHIVE: {
+        'archive', 'archives',
+    },
+}
 
 
 def folder_special_use(flags, name):
@@ -725,6 +853,13 @@ def folder_special_use(flags, name):
             return special_use
     if name.upper() == 'INBOX':
         return constants.SPECIAL_USE_INBOX
+
+    # RFC 6154 special-use flags are optional. Fall back to the common names
+    # used by servers that do not advertise them.
+    last_segment = re.split(r'[./]', name)[-1].strip().lower()
+    for (special_use, names) in POPULAR_SPECIAL_FOLDER_NAMES.items():
+        if last_segment in names:
+            return special_use
     return None
 
 

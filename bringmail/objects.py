@@ -478,12 +478,16 @@ class Message(ObjectBase):
         folder = self.folder
         if not folder.is_selectable:
             raise exceptions.FolderNotSelectable(folder.name)
+
+        def operation(client):
+            client.select_folder(folder.name, readonly=False)
+            if enabled:
+                client.add_flags([self.uid], [flag])
+            else:
+                client.remove_flags([self.uid], [flag])
+
         try:
-            with helpers.imap_connection(account, folder=folder.name, readonly=False) as client:
-                if enabled:
-                    client.add_flags([self.uid], [flag])
-                else:
-                    client.remove_flags([self.uid], [flag])
+            helpers.imap_call(account, operation)
         except exceptions.BringException:
             raise
         except Exception as exc:
@@ -504,26 +508,32 @@ class Message(ObjectBase):
         account = self.account
         source = self.folder
 
-        try:
-            with helpers.imap_connection(account, folder=source.name, readonly=False) as client:
-                try:
-                    client.move([self.uid], folder.name)
-                except Exception:
-                    client.copy([self.uid], folder.name)
-                    client.add_flags([self.uid], [b'\\Deleted'])
-                    client.expunge([self.uid])
+        def operation(client):
+            client.select_folder(source.name, readonly=False)
+            try:
+                client.move([self.uid], folder.name)
+            except Exception:
+                client.copy([self.uid], folder.name)
+                client.add_flags([self.uid], [b'\\Deleted'])
+                client.expunge([self.uid])
 
-                new_uid = None
-                new_uidvalidity = None
-                try:
-                    selected = client.select_folder(folder.name, readonly=False)
-                    new_uidvalidity = selected.get(b'UIDVALIDITY')
-                    if self.message_id:
-                        found = client.search(['HEADER', 'Message-ID', self.message_id])
-                        if len(found) == 1:
-                            new_uid = int(found[0])
-                except Exception:
-                    log.debug('Could not locate moved message in destination folder.')
+            new_uid = None
+            new_uidvalidity = None
+            try:
+                selected = client.select_folder(folder.name, readonly=False)
+                new_uidvalidity = selected.get(b'UIDVALIDITY')
+                if self.message_id:
+                    found = client.search(['HEADER', 'Message-ID', self.message_id])
+                    if len(found) == 1:
+                        new_uid = int(found[0])
+            except Exception:
+                log.debug('Could not locate moved message in destination folder.')
+            return (new_uid, new_uidvalidity)
+
+        try:
+            (new_uid, new_uidvalidity) = helpers.imap_call(account, operation)
+        except exceptions.BringException:
+            raise
         except Exception as exc:
             raise exceptions.MailServerActionError(str(exc))
 
