@@ -1164,7 +1164,11 @@ function start_sse() {
             console.warn(payload.error);
         }
         load_accounts(function() {
-            if (active_account_id !== null && String(active_account_id) === String(payload.account_id)) {
+            if (
+                active_account_id !== null &&
+                String(active_account_id) === String(payload.account_id) &&
+                current_message_id === null
+            ) {
                 load_messages(true);
             }
         });
@@ -1173,7 +1177,7 @@ function start_sse() {
     sse.addEventListener("account_refresh_queue_finished", function() {
         accounts_spinner.hide();
         load_accounts(function() {
-            if (active_kind !== null) {
+            if (active_kind !== null && current_message_id === null) {
                 load_messages(true);
             }
         });
