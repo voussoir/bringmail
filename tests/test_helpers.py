@@ -68,6 +68,29 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(part['filename'], 'notes.txt')
         self.assertIn(b'Attachment contents.', part['bytes'])
 
+    def test_folder_special_use_fallbacks(self):
+        from bringmail import constants
+        self.assertEqual(
+            helpers.folder_special_use((), 'INBOX'),
+            constants.SPECIAL_USE_INBOX,
+        )
+        self.assertEqual(
+            helpers.folder_special_use((), '[Gmail]/Trash'),
+            constants.SPECIAL_USE_TRASH,
+        )
+        self.assertEqual(
+            helpers.folder_special_use((b'\\Sent',), 'Gesendet'),
+            constants.SPECIAL_USE_SENT,
+        )
+        self.assertEqual(
+            helpers.folder_special_use((), 'INBOX.Deleted Items'),
+            constants.SPECIAL_USE_TRASH,
+        )
+        self.assertEqual(
+            helpers.folder_display_name('INBOX', '/'),
+            'Inbox',
+        )
+
     def test_date_fallback(self):
         internaldate = datetime.datetime(2025, 5, 4, 3, 2, 1, tzinfo=datetime.timezone.utc)
         raw = (

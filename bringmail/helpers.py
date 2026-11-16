@@ -393,6 +393,42 @@ def headers_text(message):
     return '\n'.join(lines)
 
 
+def empty_meta(*, internaldate=None, size=None, error=None):
+    '''
+    A minimal meta document for a message that could not be parsed. Keeping
+    the row lets the UID checkpoint advance, so an unparseable message is not
+    downloaded again on every refresh.
+    '''
+    timestamp = datetime_to_timestamp(internaldate) or 0
+    meta = {
+        'meta_version': constants.META_VERSION,
+        'subject': None,
+        'from': [],
+        'sender': [],
+        'reply_to': [],
+        'to': [],
+        'cc': [],
+        'bcc': [],
+        'date_header': None,
+        'date_unix': timestamp,
+        'internaldate_unix': timestamp,
+        'message_id': None,
+        'in_reply_to': None,
+        'references': [],
+        'list_id': None,
+        'size': size,
+        'snippet': '',
+        'has_html': False,
+        'has_plain': False,
+        'has_attachments': False,
+        'parts': [],
+        'attachments': [],
+    }
+    if error:
+        meta['parse_error'] = str(error)
+    return meta
+
+
 ####################################################################################################
 # HTML SANITIZATION
 
@@ -433,6 +469,7 @@ STYLE_TAG_BAD_PATTERNS = (
     'expression(',
     'javascript:',
     '-moz-binding',
+    'behavior:',
 )
 
 
@@ -864,6 +901,8 @@ def folder_special_use(flags, name):
 
 
 def folder_display_name(name, delimiter):
+    if name.upper() == 'INBOX':
+        return 'Inbox'
     if not delimiter:
         return name
     parts = [part for part in name.split(delimiter) if part]

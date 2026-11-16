@@ -39,7 +39,7 @@ def bringmail_flask_dev(
         site.localhost_only = True
 
     if init:
-        bringmail.bringdb.BringMailDB(create=True)
+        bringmail.bringmaildb.BringMailDB(create=True)
 
     try:
         backend.common.init_bringdb()

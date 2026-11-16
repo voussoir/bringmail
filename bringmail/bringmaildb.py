@@ -679,22 +679,25 @@ class BDBSyncMixin:
         self._fetch_pending_bodies(client, folder, progress=progress)
 
         finished = int(helpers.now())
+        pairs = {
+            'id': folder.id,
+            'last_sync': finished,
+            'last_sync_error': None,
+        }
+        if uidvalidity is not None:
+            pairs['uidvalidity'] = uidvalidity
+        if uidnext is not None:
+            pairs['uidnext'] = uidnext
+        if highestmodseq is not None:
+            pairs['highestmodseq'] = highestmodseq
         with self.transaction:
-            self.update(
-                table=objects.Folder,
-                pairs={
-                    'id': folder.id,
-                    'uidvalidity': uidvalidity,
-                    'uidnext': uidnext,
-                    'highestmodseq': highestmodseq,
-                    'last_sync': finished,
-                    'last_sync_error': None,
-                },
-                where_key='id',
-            )
-        folder.uidvalidity = uidvalidity
-        folder.uidnext = uidnext
-        folder.highestmodseq = highestmodseq
+            self.update(table=objects.Folder, pairs=pairs, where_key='id')
+        if uidvalidity is not None:
+            folder.uidvalidity = uidvalidity
+        if uidnext is not None:
+            folder.uidnext = uidnext
+        if highestmodseq is not None:
+            folder.highestmodseq = highestmodseq
         folder.last_sync = finished
         folder.last_sync_error = None
 
@@ -775,20 +778,29 @@ class BDBSyncMixin:
                 for (uid, data) in response.items():
                     uid = int(uid)
                     header_bytes = _response_header_bytes(data)
-                    if header_bytes is None:
-                        continue
                     internaldate = data.get(b'INTERNALDATE')
                     size = data.get(b'RFC822.SIZE')
                     (flags, keywords, modseq) = _response_flag_info(data)
-                    try:
-                        (message, meta) = helpers.parse_header_message(
-                            header_bytes,
+                    if header_bytes is None:
+                        meta = helpers.empty_meta(
                             internaldate=internaldate,
                             size=size,
+                            error='Server did not return headers.',
                         )
-                    except Exception:
-                        log.warning('Could not parse headers for %s uid %s.', folder, uid, exc_info=True)
-                        continue
+                    else:
+                        try:
+                            (message, meta) = helpers.parse_header_message(
+                                header_bytes,
+                                internaldate=internaldate,
+                                size=size,
+                            )
+                        except Exception as exc:
+                            log.warning('Could not parse headers for %s uid %s.', folder, uid, exc_info=True)
+                            meta = helpers.empty_meta(
+                                internaldate=internaldate,
+                                size=size,
+                                error=exc,
+                            )
                     self._insert_message(
                         account,
                         folder,
@@ -823,20 +835,29 @@ class BDBSyncMixin:
                 for (uid, data) in response.items():
                     uid = int(uid)
                     raw = _response_body_bytes(data)
-                    if raw is None:
-                        continue
                     internaldate = data.get(b'INTERNALDATE')
                     size = data.get(b'RFC822.SIZE')
                     (flags, keywords, modseq) = _response_flag_info(data)
-                    try:
-                        (message, meta) = helpers.parse_full_message(
-                            raw,
+                    if raw is None:
+                        meta = helpers.empty_meta(
                             internaldate=internaldate,
                             size=size,
+                            error='Server did not return the message body.',
                         )
-                    except Exception:
-                        log.warning('Could not parse message for %s uid %s.', folder, uid, exc_info=True)
-                        continue
+                    else:
+                        try:
+                            (message, meta) = helpers.parse_full_message(
+                                raw,
+                                internaldate=internaldate,
+                                size=size,
+                            )
+                        except Exception as exc:
+                            log.warning('Could not parse message for %s uid %s.', folder, uid, exc_info=True)
+                            meta = helpers.empty_meta(
+                                internaldate=internaldate,
+                                size=size,
+                                error=exc,
+                            )
                     self._insert_message(
                         account,
                         folder,
@@ -894,9 +915,13 @@ class BDBSyncMixin:
                             internaldate=internaldate,
                             size=size,
                         )
-                    except Exception:
+                    except Exception as exc:
                         log.warning('Could not parse pending body for %s uid %s.', folder, uid, exc_info=True)
-                        continue
+                        meta = helpers.empty_meta(
+                            internaldate=internaldate,
+                            size=size,
+                            error=exc,
+                        )
                     self.update_message_body(
                         row['id'],
                         raw=raw,
@@ -1018,9 +1043,13 @@ class BringMailDB(
             # file, so create an empty one first.
             sqlite3.connect(self.database_filepath.absolute_path).close()
 
-        self.sql_read = self._make_sqlite_read_connection(self.database_filepath)
+        # Open the writer first so WAL mode is established before the read-only
+        # connection is created. Changing journal mode while another connection
+        # is active is avoidable.
         self.sql_write = self._make_sqlite_write_connection(self.database_filepath)
-        self._load_pragmas()
+        self._load_write_pragmas()
+        self.sql_read = self._make_sqlite_read_connection(self.database_filepath)
+        self._load_read_pragmas()
 
         if existing_database:
             if not skip_version_check:
@@ -1029,8 +1058,16 @@ class BringMailDB(
             self._first_time_setup()
 
     def _load_pragmas(self):
+        # Kept for compatibility with callers that reinitialize pragmas after a
+        # connection recovery.
+        self._load_write_pragmas()
+        self._load_read_pragmas()
+
+    def _load_write_pragmas(self):
         for (key, value) in constants.WRITE_PRAGMAS.items():
             self.sql_write.execute(f'PRAGMA {key} = {value}')
+
+    def _load_read_pragmas(self):
         for (key, value) in constants.READ_PRAGMAS.items():
             self.sql_read.execute(f'PRAGMA {key} = {value}')
 

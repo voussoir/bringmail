@@ -387,9 +387,10 @@ body
 
     #messages .message
     {
-        grid-template-columns: 1.2em 1.2em 1fr 5.5em;
+        grid-template-columns: 1.2em minmax(4em, 8em) 1fr 5em;
     }
 
+    #messages .message .read_indicator,
     #messages .message .attachment,
     #messages .message .size
     {

@@ -313,7 +313,7 @@ def sse_keepalive_thread():
 
 def init_bringdb(*args, **kwargs):
     global bringdb
-    bringdb = bringmail.bringdb.BringMailDB.closest_bringmaildb(*args, **kwargs)
+    bringdb = bringmail.bringmaildb.BringMailDB.closest_bringmaildb(*args, **kwargs)
     return bringdb
 
 

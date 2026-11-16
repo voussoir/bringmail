@@ -16,7 +16,7 @@ import bringmail
 def bringmail_repl_argparse(args):
     global B
     try:
-        B = bringmail.bringdb.BringMailDB.closest_bringmaildb()
+        B = bringmail.bringmaildb.BringMailDB.closest_bringmaildb()
     except bringmail.exceptions.NoClosestBringMailDB as exc:
         pipeable.stderr(exc.error_message)
         pipeable.stderr('Try `bringmail_cli.py init` to create the database.')

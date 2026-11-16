@@ -385,7 +385,7 @@ function build_move_options() {
         }
         const option = document.createElement("option");
         option.value = folder.id;
-        option.textContent = folder.display_name;
+        option.textContent = folder.name;
         select.appendChild(option);
     }
 }
@@ -977,7 +977,11 @@ function toggle_headers() {
         render_reader_body();
         return;
     }
-    api.messages.get_headers(current_message_id, function(response) {
+    const message_id = current_message_id;
+    api.messages.get_headers(message_id, function(response) {
+        if (current_message_id !== message_id) {
+            return;
+        }
         if (!response.meta.completed || response.meta.status !== 200) {
             show_api_error(response);
             return;
@@ -1064,6 +1068,9 @@ function move_selected() {
 function delete_selected() {
     const ids = selected_or_current_ids();
     if (ids.length === 0) {
+        return;
+    }
+    if (!confirm(`Delete ${ids.length} message(s)?`)) {
         return;
     }
     api.messages.batch_delete(ids, function(response) {

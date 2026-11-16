@@ -21,12 +21,12 @@ bringdb = None
 def load_bringdb():
     global bringdb
     if bringdb is None:
-        bringdb = bringmail.bringdb.BringMailDB.closest_bringmaildb()
+        bringdb = bringmail.bringmaildb.BringMailDB.closest_bringmaildb()
     return bringdb
 
 
 def init_argparse(args):
-    bringmail.bringdb.BringMailDB(create=True)
+    bringmail.bringmaildb.BringMailDB(create=True)
     return 0
 
 
