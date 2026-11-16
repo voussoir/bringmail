@@ -18,6 +18,7 @@ let news_spinner = null;
 let reader_spinner = null;
 let messages_loading = false;
 let messages_request_serial = 0;
+let refresh_reload_pending = false;
 
 let reader_subject = null;
 let reader_meta = null;
@@ -384,6 +385,7 @@ function update_active_classes() {
 }
 
 function select_all_accounts() {
+    refresh_reload_pending = false;
     active_kind = "all";
     active_id = "all";
     active_account_id = null;
@@ -401,6 +403,7 @@ function select_account(account_id) {
     if (!account) {
         return;
     }
+    refresh_reload_pending = false;
     active_kind = "account";
     active_id = account.id;
     active_account_id = account.id;
@@ -421,6 +424,7 @@ function select_folder(folder_id) {
     if (!folder.selectable) {
         return;
     }
+    refresh_reload_pending = false;
     active_kind = "folder";
     active_id = folder.id;
     active_account_id = folder.account_id;
@@ -1117,6 +1121,29 @@ function mark_selected(seen) {
     });
 }
 
+function remove_messages_locally(message_ids) {
+    const id_set = new Set((message_ids || []).map(String));
+    if (id_set.size === 0) {
+        return;
+    }
+    messages_data = messages_data.filter(message => !id_set.has(String(message.id)));
+    messages_rendered = messages_data.length;
+    for (const row of messages_element.querySelectorAll(".message")) {
+        if (id_set.has(String(row.dataset.id))) {
+            row.remove();
+        }
+    }
+    for (const message_id of id_set) {
+        selected_ids.delete(message_id);
+    }
+    selection_anchor_id = null;
+    if (messages_data.length === 0) {
+        render_messages(true);
+    } else {
+        apply_filter();
+    }
+}
+
 function move_selected() {
     const select = document.getElementById("move_select");
     const folder_id = select.value;
@@ -1130,11 +1157,10 @@ function move_selected() {
     }
     api.messages.batch_move(ids, folder_id, function(response) {
         select.value = "";
-        batch_result_handler(response, function() {
+        batch_result_handler(response, function(returned_ids) {
             clear_reader();
-            load_accounts(function() {
-                load_messages(true);
-            });
+            remove_messages_locally(returned_ids);
+            load_accounts();
         });
     });
 }
@@ -1148,11 +1174,10 @@ function delete_selected() {
         return;
     }
     api.messages.batch_delete(ids, function(response) {
-        batch_result_handler(response, function() {
+        batch_result_handler(response, function(returned_ids) {
             clear_reader();
-            load_accounts(function() {
-                load_messages(true);
-            });
+            remove_messages_locally(returned_ids);
+            load_accounts();
         });
     });
 }
@@ -1167,10 +1192,12 @@ function refresh_account(account_id) {
 
 function refresh_active() {
     if (active_kind === "all") {
+        refresh_reload_pending = true;
         refresh_all();
         return;
     }
     if (active_account_id !== null) {
+        refresh_reload_pending = true;
         refresh_account(active_account_id);
     }
 }
@@ -1394,14 +1421,6 @@ function start_sse() {
             clearTimeout(accounts_reload_timeout);
             accounts_reload_timeout = setTimeout(load_accounts, 500);
         }
-        if (
-            payload.stage === "folder_finished" &&
-            active_kind === "folder" &&
-            String(payload.folder_id) === String(active_id) &&
-            current_message_id === null
-        ) {
-            load_messages(true);
-        }
     });
 
     sse.addEventListener("account_refresh_finished", function(event) {
@@ -1410,25 +1429,18 @@ function start_sse() {
             console.warn(payload.error);
         }
         finish_refresh_status(payload);
-        load_accounts(function() {
-            if (
-                active_kind === "all" ||
-                (active_account_id !== null &&
-                 String(active_account_id) === String(payload.account_id))
-            ) {
-                if (current_message_id === null) {
-                    load_messages(true);
-                }
-            }
-        });
+        load_accounts();
     });
 
     sse.addEventListener("account_refresh_queue_finished", function() {
         accounts_spinner.hide();
         finish_refresh_queue();
         load_accounts(function() {
-            if (active_kind !== null && current_message_id === null) {
-                load_messages(true);
+            if (refresh_reload_pending) {
+                refresh_reload_pending = false;
+                if (active_kind !== null) {
+                    load_messages(true);
+                }
             }
         });
     });
