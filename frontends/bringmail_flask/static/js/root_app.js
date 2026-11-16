@@ -1155,6 +1155,9 @@ function show_account_contextmenu(event, kind, id, account_id, title) {
 // STATUS BAR
 
 function status_account_name(account_id) {
+    if (account_id === undefined || account_id === null) {
+        return "Unknown account";
+    }
     const account = find_account(account_id);
     if (account) {
         return account.display_name || account.label || `Account ${account_id}`;
@@ -1224,13 +1227,30 @@ function begin_refresh_status(account) {
 }
 
 function update_refresh_status(payload) {
-    if (
-        !refresh_status ||
-        String(refresh_status.account_id) !== String(payload.account_id)
+    const payload_account_id = payload.account_id;
+    if (!refresh_status) {
+        const account_id = (
+            payload_account_id === undefined ?
+            active_account_id :
+            payload_account_id
+        );
+        refresh_status = {
+            account_id: account_id,
+            name: status_account_name(account_id),
+            stage: "starting",
+            folder_name: "",
+            done: 0,
+            total: 0,
+            index: 0,
+            error: null,
+        };
+    } else if (
+        payload_account_id !== undefined &&
+        String(refresh_status.account_id) !== String(payload_account_id)
     ) {
         refresh_status = {
-            account_id: payload.account_id,
-            name: status_account_name(payload.account_id),
+            account_id: payload_account_id,
+            name: status_account_name(payload_account_id),
             stage: "starting",
             folder_name: "",
             done: 0,

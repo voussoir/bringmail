@@ -841,6 +841,7 @@ class BDBSyncMixin:
             self._progress(
                 progress,
                 stage='headers',
+                account_id=folder.account_id,
                 folder_id=folder.id,
                 folder_name=folder.name,
                 done=done,
@@ -898,6 +899,7 @@ class BDBSyncMixin:
             self._progress(
                 progress,
                 stage='bodies',
+                account_id=folder.account_id,
                 folder_id=folder.id,
                 folder_name=folder.name,
                 done=done,
@@ -960,6 +962,7 @@ class BDBSyncMixin:
             self._progress(
                 progress,
                 stage='bodies',
+                account_id=folder.account_id,
                 folder_id=folder.id,
                 folder_name=folder.name,
                 done=done,

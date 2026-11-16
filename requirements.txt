@@ -1,6 +1,9 @@
 # IMAP client
 imapclient
 
+# Current CA bundle for IMAP TLS verification
+certifi
+
 # XML / HTML parsing for message bodies and sanitization
 bs4
 lxml

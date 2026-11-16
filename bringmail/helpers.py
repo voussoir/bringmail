@@ -11,9 +11,15 @@ import imapclient
 import json
 import lxml.html
 import re
+import ssl
 import threading
 import time
 import typing
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 from . import constants
 from . import exceptions
@@ -718,16 +724,34 @@ def part_payload(raw_bytes, part_index):
 ####################################################################################################
 # IMAP
 
+def make_ssl_context():
+    '''
+    Prefer the certifi CA bundle when available. Python's Windows default
+    certificate store can lag behind certificate renewals.
+    '''
+    if certifi is not None:
+        try:
+            return ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            log.warning('Could not load the certifi CA bundle.', exc_info=True)
+    return ssl.create_default_context()
+
+
 def connect_imap(account):
     '''
     Open and authenticate an IMAP connection. The caller owns the connection
     and is responsible for logging out.
     '''
+    ssl_context = None
+    if account.ssl or account.starttls:
+        ssl_context = make_ssl_context()
+
     try:
         client = imapclient.IMAPClient(
             host=account.host,
             port=account.port,
             ssl=account.ssl,
+            ssl_context=ssl_context,
             timeout=imapclient.SocketTimeout(
                 connect=constants.IMAP_CONNECT_TIMEOUT,
                 read=constants.IMAP_READ_TIMEOUT,
@@ -739,7 +763,7 @@ def connect_imap(account):
     try:
         client.normalise_times = False
         if account.starttls and not account.ssl:
-            client.starttls()
+            client.starttls(ssl_context=ssl_context)
         client.login(account.username, account.password)
     except Exception as exc:
         with contextlib.suppress(Exception):
