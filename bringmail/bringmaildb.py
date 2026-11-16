@@ -1028,7 +1028,7 @@ class BringMailDB(
             for (table, names) in columns.items()
         }
 
-    def _init_sql(self, create, skip_version_check):
+    def _init_sql(self, create=False, skip_version_check=True):
         self.database_filepath = self.data_directory.with_child(constants.DEFAULT_DBNAME)
         existing_database = self.database_filepath.exists
 

@@ -8,6 +8,7 @@ import gevent.pywsgi
 import os
 import pathlib
 import sys
+import traceback
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 FRONTENDS_DIR = THIS_DIR.parent
@@ -47,8 +48,14 @@ def bringmail_flask_dev(
         log.error(exc.error_message)
         log.error('Try adding --init to create the database.')
         return 1
-    except bringmail.exceptions.SQLiteTooOld as exc:
-        log.error(exc.error_message)
+    except (bringmail.exceptions.SQLiteTooOld,
+            bringmail.exceptions.DatabaseOutOfDate,
+            bringmail.exceptions.BadDataDirectory):
+        log.error(traceback.format_exc())
+        return 1
+    except FileNotFoundError as exc:
+        log.error(str(exc))
+        log.error('Try adding --init to create the database.')
         return 1
 
     message = f'Starting server on {host}:{port}, pid={os.getpid()}.'

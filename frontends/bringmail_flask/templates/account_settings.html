@@ -126,8 +126,8 @@ pre.error_details
     <div class="group panel">
         <h2>Refresh</h2>
         {% set interval = account.autorefresh_interval if account else 900 %}
-        {% set hours = (interval // 3600) %}
-        {% set minutes = ((interval % 3600) // 60) %}
+        {% set hours = (interval / 3600)|int %}
+        {% set minutes = ((interval % 3600) / 60)|int %}
         <p>Refresh this account every
             <input type="number" id="interval_hours_input" min="0" value="{{hours}}" style="width: 4em"/> hours and
             <input type="number" id="interval_minutes_input" min="0" max="59" value="{{minutes}}" style="width: 4em"/> minutes.

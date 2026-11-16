@@ -473,7 +473,7 @@ STYLE_TAG_BAD_PATTERNS = (
 )
 
 
-def _url_is_safe(url):
+def _url_is_safe(url, *, allow_data=False):
     if url is None:
         return False
     url = str(url).strip()
@@ -487,7 +487,7 @@ def _url_is_safe(url):
     if lower.startswith('javascript:') or lower.startswith('vbscript:'):
         return False
     if lower.startswith('data:'):
-        return lower.startswith('data:image/')
+        return allow_data and lower.startswith('data:image/')
     if lower.startswith(('http:', 'https:', 'mailto:', 'cid:', 'tel:')):
         return True
     if url.startswith(('#', '/', './', '../')):
@@ -559,9 +559,11 @@ def sanitize_email_html(html):
                 del element.attrib[attribute]
                 continue
 
-            if attribute_lower in URL_ATTRIBUTES and not _url_is_safe(value):
-                del element.attrib[attribute]
-                continue
+            if attribute_lower in URL_ATTRIBUTES:
+                allow_data = attribute_lower != 'href'
+                if not _url_is_safe(value, allow_data=allow_data):
+                    del element.attrib[attribute]
+                    continue
 
             if attribute_lower == 'style':
                 if _style_is_safe(value):
