@@ -245,9 +245,9 @@ class Folder(ObjectBase):
 
         self.id = db_row['id']
         self.account_id = db_row['account_id']
-        self.name = db_row['name']
-        self.display_name = db_row['display_name']
-        self.delimiter = db_row['delimiter']
+        self.name = helpers.decode_text(db_row['name'])
+        self.display_name = helpers.decode_text(db_row['display_name'])
+        self.delimiter = helpers.decode_text(db_row['delimiter'])
         self.attributes = _loads_json(db_row['attributes'], [])
         self.special_use = db_row['special_use']
         self.uidvalidity = db_row['uidvalidity']

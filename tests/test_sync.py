@@ -26,7 +26,8 @@ class FakeIMAPClient:
         self.logged_out = False
 
     def list_folders(self):
-        return [((b'\\HasNoChildren',), '/', 'INBOX')]
+        # imapclient returns the delimiter as bytes, the name as str.
+        return [((b'\\HasNoChildren',), b'/', 'INBOX')]
 
     def has_capability(self, capability):
         return False
@@ -118,6 +119,8 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(all(message.body_fetched for message in messages))
         self.assertEqual(folder.uidvalidity, 100)
         self.assertEqual(folder.uidnext, 3)
+        self.assertEqual(folder.delimiter, '/')
+        self.assertEqual(folder.display_name, 'Inbox')
         self.assertIn('Hello', messages[0].get_body()['html'])
 
         # A second refresh with one new message and a flag change must not

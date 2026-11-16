@@ -179,10 +179,12 @@ class BDBFolderMixin:
         ):
         if not isinstance(account, objects.Account):
             raise TypeError(account)
-        name = helpers.normalize_string_not_blank(name)
-        display_name = helpers.normalize_string_blank_to_none(display_name)
+        name = helpers.normalize_string_not_blank(helpers.decode_text(name))
+        display_name = helpers.normalize_string_blank_to_none(helpers.decode_text(display_name))
         if delimiter is not None:
-            delimiter = str(delimiter)
+            delimiter = helpers.decode_text(delimiter)
+        if delimiter == '':
+            delimiter = None
         attributes = attributes or []
         if not isinstance(attributes, (list, tuple)):
             raise TypeError(attributes)
@@ -534,6 +536,8 @@ class BDBSyncMixin:
 
         specs = []
         for (index, (flags, delimiter, name)) in enumerate(server_folders):
+            delimiter = helpers.decode_text(delimiter)
+            name = helpers.decode_text(name)
             decoded_flags = sorted({helpers.decode_flag(flag) for flag in flags})
             special_use = helpers.folder_special_use(flags, name)
             display_name = helpers.folder_display_name(name, delimiter)

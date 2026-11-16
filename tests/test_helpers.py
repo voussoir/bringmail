@@ -90,6 +90,11 @@ class HelpersTest(unittest.TestCase):
             helpers.folder_display_name('INBOX', '/'),
             'Inbox',
         )
+        self.assertEqual(
+            helpers.folder_display_name('INBOX.Subfolder', b'/'),
+            'Subfolder',
+        )
+        self.assertEqual(helpers.folder_depth('INBOX.Subfolder', b'/'), 1)
 
     def test_date_fallback(self):
         internaldate = datetime.datetime(2025, 5, 4, 3, 2, 1, tzinfo=datetime.timezone.utc)

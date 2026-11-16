@@ -92,7 +92,10 @@ class FlaskTest(unittest.TestCase):
                 '/static/js/api.js',
                 '/static/favicon.svg'):
             response = self.client.get(path)
-            self.assertEqual(response.status_code, 200, path)
+            try:
+                self.assertEqual(response.status_code, 200, path)
+            finally:
+                response.close()
 
     def test_accounts_json_hides_password(self):
         response = self.client.get('/accounts.json')

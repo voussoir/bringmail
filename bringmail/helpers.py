@@ -884,6 +884,7 @@ POPULAR_SPECIAL_FOLDER_NAMES = {
 
 
 def folder_special_use(flags, name):
+    name = decode_text(name)
     decoded = {decode_flag(flag) for flag in flags}
     for special_use in constants.SPECIAL_USES:
         if special_use == constants.SPECIAL_USE_INBOX:
@@ -902,7 +903,22 @@ def folder_special_use(flags, name):
     return None
 
 
+def decode_text(value):
+    '''
+    imapclient returns folder names as str but delimiters and flags as bytes.
+    Normalize text-like values at the boundary so the database and templates
+    never receive bytes.
+    '''
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode('utf-8', 'replace')
+    return str(value)
+
+
 def folder_display_name(name, delimiter):
+    name = decode_text(name)
+    delimiter = decode_text(delimiter)
     if name.upper() == 'INBOX':
         return 'Inbox'
     if not delimiter:
@@ -914,6 +930,8 @@ def folder_display_name(name, delimiter):
 
 
 def folder_depth(name, delimiter):
+    name = decode_text(name)
+    delimiter = decode_text(delimiter)
     if not delimiter:
         return 0
     return max(0, len([part for part in name.split(delimiter) if part]) - 1)
@@ -928,7 +946,7 @@ def folder_sort_key(name, special_use):
         constants.SPECIAL_USE_JUNK: 4,
         constants.SPECIAL_USE_TRASH: 9,
     }.get(special_use, 5)
-    return (priority, name.lower())
+    return (priority, decode_text(name).lower())
 
 
 ####################################################################################################
