@@ -885,6 +885,10 @@ POPULAR_SPECIAL_FOLDER_NAMES = {
 
 def folder_special_use(flags, name):
     name = decode_text(name)
+    if flags is None:
+        flags = []
+    elif isinstance(flags, (bytes, str)):
+        flags = [flags]
     decoded = {decode_flag(flag) for flag in flags}
     for special_use in constants.SPECIAL_USES:
         if special_use == constants.SPECIAL_USE_INBOX:

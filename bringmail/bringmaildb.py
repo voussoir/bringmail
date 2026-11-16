@@ -34,6 +34,10 @@ def _split_imap_flags(flags):
     '''
     Return (standard_flag_booleans, custom_keyword_list).
     '''
+    if flags is None:
+        flags = []
+    elif isinstance(flags, (bytes, str)):
+        flags = [flags]
     decoded = [helpers.decode_flag(flag) for flag in flags]
     standard = {
         'seen': '\\Seen' in decoded,
@@ -68,6 +72,8 @@ def _response_header_bytes(data):
 
 def _response_flag_info(data):
     flags = data.get(b'FLAGS', ())
+    if flags is None:
+        flags = ()
     (standard, keywords) = _split_imap_flags(flags)
     modseq = data.get(b'MODSEQ')
     if isinstance(modseq, (list, tuple)):
@@ -188,6 +194,8 @@ class BDBFolderMixin:
         attributes = attributes or []
         if not isinstance(attributes, (list, tuple)):
             raise TypeError(attributes)
+        if special_use is not None:
+            special_use = helpers.decode_text(special_use) or None
         if ui_order_rank is None:
             ui_order_rank = self.get_last_folder_rank(account) + 1
 
@@ -538,6 +546,10 @@ class BDBSyncMixin:
         for (index, (flags, delimiter, name)) in enumerate(server_folders):
             delimiter = helpers.decode_text(delimiter)
             name = helpers.decode_text(name)
+            if flags is None:
+                flags = []
+            elif isinstance(flags, (bytes, str)):
+                flags = [flags]
             decoded_flags = sorted({helpers.decode_flag(flag) for flag in flags})
             special_use = helpers.folder_special_use(flags, name)
             display_name = helpers.folder_display_name(name, delimiter)

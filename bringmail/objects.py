@@ -248,8 +248,11 @@ class Folder(ObjectBase):
         self.name = helpers.decode_text(db_row['name'])
         self.display_name = helpers.decode_text(db_row['display_name'])
         self.delimiter = helpers.decode_text(db_row['delimiter'])
-        self.attributes = _loads_json(db_row['attributes'], [])
-        self.special_use = db_row['special_use']
+        self.attributes = [
+            helpers.decode_text(attribute)
+            for attribute in _loads_json(db_row['attributes'], [])
+        ]
+        self.special_use = helpers.decode_text(db_row['special_use'])
         self.uidvalidity = db_row['uidvalidity']
         self.uidnext = db_row['uidnext']
         self.highestmodseq = db_row['highestmodseq']
