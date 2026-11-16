@@ -211,7 +211,7 @@ def part_text(part):
     '''
     try:
         return part.get_content()
-    except (LookupError, UnicodeError):
+    except Exception:
         data = part_payload_bytes(part)
         charset = part.get_content_charset() or 'utf-8'
         try:

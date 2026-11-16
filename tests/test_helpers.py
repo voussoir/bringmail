@@ -62,7 +62,9 @@ class HelpersTest(unittest.TestCase):
         self.assertNotIn('tracker', helpers.sanitize_email_html('<script>x</script>'))
 
     def test_part_payload(self):
-        part = helpers.part_payload(self.raw, 1)
+        # Leaves in walk order: text/plain alternative (0), text/html
+        # alternative (1), notes.txt attachment (2).
+        part = helpers.part_payload(self.raw, 2)
         self.assertEqual(part['filename'], 'notes.txt')
         self.assertIn(b'Attachment contents.', part['bytes'])
 

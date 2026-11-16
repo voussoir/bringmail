@@ -78,6 +78,12 @@ def before_request():
     if site.localhost_only and not request.is_localhost:
         flask.abort(403)
 
+    # A custom header on every mutating request blocks cross-site form
+    # submissions, since browsers will not attach it to a plain HTML form.
+    if request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        if request.headers.get('X-BringMail-Request') != '1':
+            flask.abort(403)
+
 
 @site.after_request
 def after_request(response):

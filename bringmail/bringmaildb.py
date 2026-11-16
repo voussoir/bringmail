@@ -576,6 +576,7 @@ class BDBSyncMixin:
                     self.delete(table=objects.Folder, pairs={'id': folder.id})
 
         self.caches[objects.Folder].clear()
+        self.caches[objects.Message].clear()
 
         folders = [folder for folder in self.get_folders(account) if folder.sync_enabled and folder.is_selectable]
         total = len(folders)

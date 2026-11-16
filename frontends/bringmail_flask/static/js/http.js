@@ -81,5 +81,9 @@ http.get = function get(kwargs) {
 
 http.post = function post(kwargs) {
     kwargs.method = "POST";
+    kwargs.headers = Object.assign(
+        {"X-BringMail-Request": "1"},
+        kwargs.headers || {}
+    );
     return http._request(kwargs);
 };
