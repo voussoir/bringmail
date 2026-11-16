@@ -26,6 +26,13 @@ body
     min-height: 0;
 }
 
+body.layout_lmr #content_body
+{
+    grid-template:
+        "left right reader" minmax(0, 1fr)
+        /240px 34% minmax(0, 1fr);
+}
+
 #status_bar
 {
     grid-area: status_bar;
@@ -233,7 +240,7 @@ body
 #messages .message
 {
     display: grid;
-    grid-template-columns: 1.2em minmax(5em, 12em) 1fr auto 7.5em 4.5em;
+    grid-template-columns: 1.2em minmax(4em, 12em) minmax(0, 1fr) auto max-content;
     grid-column-gap: 0.5em;
     align-items: baseline;
     padding: 2px 4px;
@@ -288,12 +295,12 @@ body
     opacity: 0.7;
 }
 
-#messages .message .date,
-#messages .message .size
+#messages .message .date
 {
     text-align: right;
     font-size: 90%;
     white-space: nowrap;
+    padding-right: 2px;
 }
 
 /* Reader *********************************************************************/
@@ -411,6 +418,15 @@ body
             /1fr;
     }
 
+    body.layout_lmr #content_body
+    {
+        grid-template:
+            "left" auto
+            "right" minmax(300px, 45vh)
+            "reader" minmax(300px, 45vh)
+            /1fr;
+    }
+
     #left
     {
         min-height: 250px;
@@ -418,12 +434,11 @@ body
 
     #messages .message
     {
-        grid-template-columns: minmax(4em, 8em) 1fr 5em;
+        grid-template-columns: minmax(3em, 7em) minmax(0, 1fr) max-content;
     }
 
     #messages .message .read_indicator,
-    #messages .message .attachment,
-    #messages .message .size
+    #messages .message .attachment
     {
         display: none;
     }

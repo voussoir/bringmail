@@ -550,11 +550,6 @@ function create_message_row(message) {
     date.textContent = common.format_timestamp_local(message.date_unix);
     row.appendChild(date);
 
-    const size = document.createElement("span");
-    size.classList.add("size");
-    size.textContent = common.format_size(message.size);
-    row.appendChild(size);
-
     return row;
 }
 

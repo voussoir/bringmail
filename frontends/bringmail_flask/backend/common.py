@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 
+from werkzeug.datastructures import MultiDict
 from voussoirkit import flasktools
 from voussoirkit import pathclass
 from voussoirkit import sentinel
@@ -91,10 +92,46 @@ def after_request(response):
     return response
 
 
+DEFAULT_LAYOUT = 'ltb'
+LAYOUTS = {'ltb', 'lmr'}
+
+
+def give_layout_cookie(function, *, cookie_name, default_layout):
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        old_layout = request.cookies.get(cookie_name, None)
+        new_layout = request.args.get('layout', None)
+        if new_layout is not None and new_layout not in LAYOUTS:
+            new_layout = None
+        layout = new_layout or old_layout or default_layout
+        if layout not in LAYOUTS:
+            layout = default_layout
+
+        request.cookies = MultiDict(request.cookies)
+        request.cookies[cookie_name] = layout
+
+        response = function(*args, **kwargs)
+
+        if new_layout is None:
+            pass
+        elif new_layout == '':
+            response.set_cookie(cookie_name, value='', expires=0)
+        elif new_layout != old_layout:
+            response.set_cookie(cookie_name, value=new_layout, expires=2147483647)
+
+        return response
+    return wrapped
+
+
 site.route = flasktools.decorate_and_route(
     flask_app=site,
     decorators=[
         flasktools.ensure_response_type,
+        functools.partial(
+            give_layout_cookie,
+            cookie_name='bringmail_layout',
+            default_layout=DEFAULT_LAYOUT,
+        ),
         functools.partial(
             flasktools.give_theme_cookie,
             cookie_name='bringmail_theme',
@@ -163,6 +200,15 @@ def get_messages(message_ids):
 
 # Other functions ##################################################################################
 
+def get_layout():
+    layout = request.args.get('layout', None)
+    if layout not in LAYOUTS:
+        layout = request.cookies.get('bringmail_layout', DEFAULT_LAYOUT)
+    if layout not in LAYOUTS:
+        layout = DEFAULT_LAYOUT
+    return layout
+
+
 def render_template(request, template_name, **kwargs):
     theme = request.cookies.get('bringmail_theme', None)
     response = flask.render_template(
@@ -170,6 +216,7 @@ def render_template(request, template_name, **kwargs):
         site=site,
         request=request,
         theme=theme,
+        layout=get_layout(),
         **kwargs,
     )
     return response

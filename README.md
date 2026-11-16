@@ -5,9 +5,11 @@ BringMail is a local IMAP mail reader with an offline SQLite cache and a
 three-panel web interface modeled on
 [BringRSS](https://github.com/voussoir/bringrss).
 
-The left panel lists accounts and their folders, the upper-right panel lists
-messages in the selected folder, and the lower-right panel shows the selected
-message. All mail is downloaded into a local database, so cached folders remain
+The default LTB layout has a left panel for accounts and folders, an
+upper-right message list, and a lower-right reader. The LMR layout puts the
+account/folder selector, message list, and reader in three columns, with the
+reader occupying the largest column. Layout is selected on the About page.
+All mail is downloaded into a local database, so cached folders remain
 readable when the mail server is unreachable.
 
 Features
@@ -37,6 +39,7 @@ Features
 - Message lists load 500 at a time and automatically fetch older messages when
   you scroll near the bottom.
 - Multiple themes.
+- User-selectable LTB and LMR layouts.
 
 Requirements
 ------------

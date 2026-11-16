@@ -120,6 +120,22 @@ class FlaskTest(unittest.TestCase):
             finally:
                 response.close()
 
+    def test_layout_selection(self):
+        response = self.client.get('/')
+        self.assertIn(b'class="layout_ltb"', response.data)
+
+        response = self.client.get('/about?layout=lmr')
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.get('/')
+        self.assertIn(b'class="layout_lmr"', response.data)
+
+        response = self.client.get('/about?layout=ltb')
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.get('/')
+        self.assertIn(b'class="layout_ltb"', response.data)
+
     def test_account_messages_only_inbox_and_sent(self):
         def meta_for(subject):
             return {
