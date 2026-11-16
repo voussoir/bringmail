@@ -44,6 +44,29 @@ class HelpersTest(unittest.TestCase):
         self.assertFalse(body['remote_content'])
         self.assertIn('Subject:', body['headers'])
 
+    def test_html_only_body_keeps_paragraphs(self):
+        raw = (
+            b'From: a@example.com\r\n'
+            b'Subject: html only\r\n'
+            b'Content-Type: text/html; charset=utf-8\r\n'
+            b'\r\n'
+            b'<html><body>'
+            b'<p>First paragraph.</p>'
+            b'<p>Second paragraph.</p>'
+            b'<ul><li>One</li><li>Two</li></ul>'
+            b'</body></html>'
+        )
+        body = helpers.body_for_message(raw)
+        self.assertIn('First paragraph.\n\nSecond paragraph.', body['text'])
+        self.assertIn('- One', body['text'])
+        self.assertIn('- Two', body['text'])
+
+    def test_normalize_plain_text(self):
+        text = helpers.normalize_plain_text(
+            '  first line\r\n\r\n\r\nsecond line  \r\n'
+        )
+        self.assertEqual(text, 'first line\n\nsecond line')
+
     def test_sanitizer(self):
         dirty = '''
         <p onclick="evil()">hello

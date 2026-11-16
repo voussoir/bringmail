@@ -84,6 +84,10 @@ class DatabaseTest(unittest.TestCase):
         self.assertGreaterEqual(sqlite3.sqlite_version_info, constants.MINIMUM_SQLITE)
         self.assertEqual(self.db.pragma_read('user_version'), constants.DATABASE_VERSION)
 
+    def test_page_size(self):
+        self.assertEqual(constants.DEFAULT_PAGE_SIZE, 500)
+        self.assertEqual(constants.MAX_PAGE_SIZE, 2500)
+
     def test_generated_columns_and_body(self):
         account = self.make_account()
         folder = self.make_folder(account)
@@ -209,6 +213,85 @@ class DatabaseTest(unittest.TestCase):
                     username='user@example.com',
                     password='different',
                 )
+
+    def test_account_aggregate_folders(self):
+        account = self.make_account()
+        inbox = self.make_folder(account)
+        inbox_sub = self.make_folder(
+            account,
+            name='INBOX/Receipts',
+            display_name='Receipts',
+            special_use=None,
+        )
+        sent = self.make_folder(
+            account,
+            name='Sent',
+            display_name='Sent',
+            special_use=constants.SPECIAL_USE_SENT,
+        )
+        sent_sub = self.make_folder(
+            account,
+            name='Sent/2026',
+            display_name='2026',
+            special_use=None,
+        )
+        junk = self.make_folder(
+            account,
+            name='Junk',
+            display_name='Junk',
+            special_use=constants.SPECIAL_USE_JUNK,
+        )
+        trash = self.make_folder(
+            account,
+            name='Trash',
+            display_name='Trash',
+            special_use=constants.SPECIAL_USE_TRASH,
+        )
+        archive = self.make_folder(
+            account,
+            name='Archive',
+            display_name='Archive',
+            special_use=constants.SPECIAL_USE_ARCHIVE,
+        )
+
+        def message_meta(subject, date_unix):
+            return {
+                'subject': subject,
+                'from': [],
+                'to': [],
+                'cc': [],
+                'date_unix': date_unix,
+                'message_id': f'<{subject}@example.com>',
+                'has_attachments': False,
+                'snippet': '',
+            }
+
+        self.make_message(account, inbox, message_meta('inbox', 1), uid=1)
+        self.make_message(
+            account, inbox_sub, message_meta('receipts', 2), uid=1,
+            flags={'seen': True},
+        )
+        self.make_message(account, sent, message_meta('sent', 3), uid=1)
+        self.make_message(account, sent_sub, message_meta('sent-year', 4), uid=1)
+        self.make_message(account, junk, message_meta('junk', 5), uid=1)
+        self.make_message(account, trash, message_meta('trash', 6), uid=1)
+        self.make_message(account, archive, message_meta('archive', 7), uid=1)
+
+        aggregate = account.get_aggregate_folders()
+        self.assertEqual(
+            {folder.name for folder in aggregate},
+            {'INBOX', 'INBOX/Receipts', 'Sent', 'Sent/2026'},
+        )
+        messages = self.db.get_messages(
+            folder_ids=[folder.id for folder in aggregate],
+            limit=100,
+        )
+        self.assertEqual(
+            {message.subject for message in messages},
+            {'inbox', 'receipts', 'sent', 'sent-year'},
+        )
+        self.assertEqual(account.get_unread_count(), 3)
+        self.assertEqual(account.jsonify(unread_count=True)['unread_count'], 3)
 
     def test_account_delete_cascades(self):
         account = self.make_account()

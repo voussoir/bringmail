@@ -79,10 +79,16 @@ class FlaskTest(unittest.TestCase):
         response = self.client.get('/account/add')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Add account', response.data)
+        self.assertNotIn(b'Themes:', response.data)
 
         response = self.client.get(f'/account/{self.account.id}/settings')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Inbox', response.data)
+        self.assertNotIn(b'Themes:', response.data)
+
+        response = self.client.get('/about')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Themes:', response.data)
 
     def test_static_assets(self):
         for path in (
@@ -96,6 +102,63 @@ class FlaskTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, path)
             finally:
                 response.close()
+
+    def test_account_messages_only_inbox_and_sent(self):
+        def meta_for(subject):
+            return {
+                'subject': subject,
+                'from': [],
+                'to': [],
+                'cc': [],
+                'date_unix': 1,
+                'message_id': f'<{subject}@example.com>',
+                'has_attachments': False,
+                'snippet': '',
+            }
+
+        with self.db.transaction:
+            sent = self.db.add_folder(
+                account=self.account,
+                name='Sent',
+                display_name='Sent',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_SENT,
+            )
+            sent_sub = self.db.add_folder(
+                account=self.account,
+                name='Sent/2026',
+                display_name='2026',
+                delimiter='/',
+            )
+            junk = self.db.add_folder(
+                account=self.account,
+                name='Junk',
+                display_name='Junk',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_JUNK,
+            )
+            for (folder, uid, subject) in (
+                    (sent, 1, 'sent'),
+                    (sent_sub, 1, 'sent-year'),
+                    (junk, 1, 'junk')):
+                self.db.add_message(
+                    account=self.account,
+                    folder=folder,
+                    uid=uid,
+                    uidvalidity=1,
+                    raw=None,
+                    meta=meta_for(subject),
+                    size=0,
+                )
+
+        response = self.client.get(f'/account/{self.account.id}/messages.json?limit=100')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(
+            {message['subject'] for message in data['messages']},
+            {'Hello ✓', 'sent', 'sent-year'},
+        )
+        self.assertEqual(data['account']['unread_count'], 3)
 
     def test_accounts_json_hides_password(self):
         response = self.client.get('/accounts.json')

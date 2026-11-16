@@ -35,9 +35,13 @@ def _pagination_args():
 
 def _message_list_response(*, folder=None, account=None):
     (limit, before_date, before_id) = _pagination_args()
+    if account is not None:
+        folder_ids = [folder.id for folder in account.get_aggregate_folders()]
+    else:
+        folder_ids = None
     messages = common.bringdb.get_messages(
         folder=folder,
-        account=account,
+        folder_ids=folder_ids,
         limit=min(limit + 1, bringmail.constants.MAX_PAGE_SIZE),
         before_date=before_date,
         before_id=before_id,
@@ -52,7 +56,7 @@ def _message_list_response(*, folder=None, account=None):
     if folder is not None:
         response['folder'] = folder.jsonify()
     elif account is not None:
-        response['account'] = account.jsonify()
+        response['account'] = account.jsonify(unread_count=True)
     return flasktools.json_response(response)
 
 

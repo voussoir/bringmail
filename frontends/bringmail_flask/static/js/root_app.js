@@ -7,6 +7,8 @@ const BLOCKED_IMAGE = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
     '</svg>'
 );
 
+const MESSAGE_PAGE_SIZE = 500;
+
 let accounts_element = null;
 let messages_element = null;
 let load_more_button = null;
@@ -51,7 +53,7 @@ let current_message_id = null;
 let current_message_body = null;
 let reader_request = null;
 let reader_resize_observer = null;
-let reader_mode = "html";
+let reader_mode = "text";
 let reader_show_headers = false;
 let reader_headers_text = null;
 let allow_images = false;
@@ -287,6 +289,29 @@ function update_unread_displays() {
     }
 }
 
+function folder_in_account_view(folder, account) {
+    const root_names = new Set([
+        "INBOX", "SENT", "SENT ITEMS", "SENT MAIL", "SENT MESSAGES",
+    ]);
+    const roots = account.folders.filter(item => {
+        if (item.special_use === "\\Inbox" || item.special_use === "\\Sent") {
+            return true;
+        }
+        const name = (item.name || "").split(/[./]/).pop().toUpperCase();
+        return root_names.has(name);
+    });
+    for (const root of roots) {
+        if (String(root.id) === String(folder.id)) {
+            return true;
+        }
+        const delimiter = root.delimiter || folder.delimiter;
+        if (delimiter && String(folder.name).startsWith(root.name + delimiter)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function adjust_unread(folder_id, delta) {
     for (const account of accounts_data) {
         const folder = account.folders.find(item => String(item.id) === String(folder_id));
@@ -294,7 +319,9 @@ function adjust_unread(folder_id, delta) {
             continue;
         }
         folder.unread_count = Math.max(0, (folder.unread_count || 0) + delta);
-        account.unread_count = Math.max(0, (account.unread_count || 0) + delta);
+        if (folder_in_account_view(folder, account)) {
+            account.unread_count = Math.max(0, (account.unread_count || 0) + delta);
+        }
         update_unread_displays();
         return;
     }
@@ -333,7 +360,7 @@ function select_account(account_id) {
 
     update_active_classes();
     build_move_options();
-    set_active_title(account.display_name);
+    set_active_title(`${account.display_name} / Inbox + Sent`);
     load_messages(true);
 }
 
@@ -410,7 +437,7 @@ function load_messages(reset) {
         clear_reader();
     }
 
-    const parameters = {limit: 100};
+    const parameters = {limit: MESSAGE_PAGE_SIZE};
     if (!reset && messages_data.length) {
         const last = messages_data[messages_data.length - 1];
         parameters.before_date = last.date_unix;
@@ -703,7 +730,7 @@ function navigate(direction) {
 function clear_reader() {
     current_message_id = null;
     current_message_body = null;
-    reader_mode = "html";
+    reader_mode = "text";
     reader_show_headers = false;
     reader_headers_text = null;
     allow_images = false;
@@ -826,7 +853,7 @@ function render_reader(body) {
     reader_images_button.classList.toggle("hidden", !body.remote_content);
     reader_headers_button.classList.remove("hidden");
 
-    reader_mode = body.html ? "html" : "text";
+    reader_mode = body.text ? "text" : "html";
     reader_show_headers = false;
     allow_images = false;
 
@@ -841,7 +868,7 @@ function render_reader_body() {
 
     reader_html_button.classList.toggle("bold", reader_mode === "html" && !reader_show_headers);
     reader_text_button.classList.toggle("bold", reader_mode === "text" && !reader_show_headers);
-    if (allow_images || !body.remote_content) {
+    if (allow_images || !body.remote_content || reader_mode !== "html") {
         reader_images_button.classList.add("hidden");
     } else {
         reader_images_button.classList.remove("hidden");

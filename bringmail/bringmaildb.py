@@ -380,6 +380,7 @@ class BDBMessageMixin:
             self,
             *,
             folder=None,
+            folder_ids=None,
             account=None,
             limit=constants.DEFAULT_PAGE_SIZE,
             before_date=None,
@@ -392,11 +393,18 @@ class BDBMessageMixin:
         if folder is not None:
             wheres.append('folder_id == ?')
             bindings.append(folder.id)
+        elif folder_ids is not None:
+            folder_ids = [int(folder_id) for folder_id in folder_ids]
+            if not folder_ids:
+                return []
+            placeholders = _placeholders(len(folder_ids))
+            wheres.append(f'folder_id IN {placeholders}')
+            bindings.extend(folder_ids)
         elif account is not None:
             wheres.append('account_id == ?')
             bindings.append(account.id)
         else:
-            raise ValueError('Either folder or account is required.')
+            raise ValueError('Either folder, folder_ids, or account is required.')
 
         wheres.append('imap_deleted == 0')
 

@@ -253,6 +253,49 @@ def text_from_html(html):
     return text.strip()
 
 
+def normalize_plain_text(text):
+    if not text:
+        return ''
+    text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\xa0', ' ')
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r' *\n *', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+HTML_BLOCK_TAGS = (
+    'address', 'article', 'aside', 'blockquote', 'caption', 'dd', 'div',
+    'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'li', 'main', 'nav',
+    'ol', 'p', 'pre', 'section', 'table', 'tbody', 'tfoot', 'thead', 'tr',
+    'ul',
+)
+
+
+def html_to_text(html):
+    '''
+    Convert HTML mail into plain text while keeping paragraph boundaries.
+    '''
+    if not html:
+        return ''
+    soup = bs4.BeautifulSoup(html, 'html.parser')
+    for chaff in soup.find_all(['script', 'style', 'head', 'title', 'noscript']):
+        chaff.decompose()
+    for br in soup.find_all('br'):
+        br.replace_with('\n')
+    for hr in soup.find_all('hr'):
+        hr.replace_with('\n\n---\n\n')
+    for cell in soup.find_all(['td', 'th']):
+        cell.insert_after('\t')
+    for item in soup.find_all('li'):
+        item.insert_before('- ')
+    for block in soup.find_all(HTML_BLOCK_TAGS):
+        separator = '\n' if block.name in ('li', 'tr', 'dt', 'dd') else '\n\n'
+        block.insert_after(separator)
+    text = soup.get_text('')
+    return normalize_plain_text(text)
+
+
 def snippet_from_message(message):
     plain = find_text_part(message, 'plain')
     if plain is not None:
@@ -632,11 +675,11 @@ def body_for_message(raw_bytes):
     plain = find_text_part(message, 'plain')
     html_part = find_text_part(message, 'html')
 
-    plain_text = part_text(plain) if plain is not None else ''
+    plain_text = normalize_plain_text(part_text(plain)) if plain is not None else ''
     html = part_text(html_part) if html_part is not None else ''
 
     if not plain_text and html:
-        plain_text = text_from_html(html)
+        plain_text = html_to_text(html)
 
     sanitized = sanitize_email_html(html)
     remote_content = has_remote_content(sanitized)

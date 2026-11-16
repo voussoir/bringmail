@@ -16,6 +16,8 @@ Features
 - Unlimited accounts, each with its own IMAP settings and refresh interval.
 - Folder discovery, including special-use folders (Inbox, Sent, Drafts, Junk,
   Archive, Trash).
+- Selecting an account shows INBOX and SENT plus their subfolders. Junk, Trash,
+  Archive, and unrelated folders remain available as individual folders.
 - Incremental synchronization using UIDVALIDITY, UIDNEXT, and CONDSTORE where
   the server supports them.
 - Every message body is downloaded during refresh and stored locally, so every
@@ -23,9 +25,11 @@ Features
 - Optional header-first import of large folders: the message list becomes
   usable while bodies fill in newest-first.
 - Read/unread, flag/unflag, move to folder, and delete to Trash.
-- HTML mail is sanitized server-side and rendered inside a sandboxed iframe.
+- The reader opens in plaintext mode by default; HTML remains one click away.
+  HTML mail is sanitized server-side and rendered inside a sandboxed iframe.
   Remote images are blocked until you click "Load images"; inline `cid:` images
   come from the local cache.
+- Message lists load 500 at a time, with older messages behind "Load more".
 - Multiple themes.
 
 Requirements

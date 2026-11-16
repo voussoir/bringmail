@@ -353,6 +353,12 @@ body
     color: #111;
 }
 
+#reader_plain
+{
+    font-family: inherit;
+    line-height: 1.5;
+}
+
 #reader_loading_spinner
 {
     position: absolute;

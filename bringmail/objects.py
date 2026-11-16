@@ -112,6 +112,45 @@ class Account(ObjectBase):
     def get_folders(self):
         return self.bringmaildb.get_folders(account=self)
 
+    @staticmethod
+    def _aggregate_folders_from(folders):
+        '''
+        The account-level view is the union of INBOX and SENT and their
+        descendants. Junk, Trash, Archive, and unrelated folders are excluded.
+        '''
+        roots = {}
+        for folder in folders:
+            special_use = folder.special_use
+            if not special_use:
+                special_use = helpers.folder_special_use(folder.attributes, folder.name)
+            if special_use in (constants.SPECIAL_USE_INBOX, constants.SPECIAL_USE_SENT):
+                roots.setdefault(special_use, folder)
+
+        if not roots:
+            return []
+
+        selected = []
+        seen = set()
+        for folder in folders:
+            for root in roots.values():
+                if folder.id == root.id:
+                    in_subtree = True
+                else:
+                    delimiter = root.delimiter or folder.delimiter
+                    in_subtree = bool(
+                        delimiter and
+                        folder.name.startswith(root.name + delimiter)
+                    )
+                if in_subtree:
+                    if folder.id not in seen:
+                        seen.add(folder.id)
+                        selected.append(folder)
+                    break
+        return selected
+
+    def get_aggregate_folders(self):
+        return self._aggregate_folders_from(self.get_folders())
+
     def get_trash_folder(self):
         for folder in self.get_folders():
             if folder.special_use == constants.SPECIAL_USE_TRASH:
@@ -119,11 +158,15 @@ class Account(ObjectBase):
         return None
 
     def get_unread_count(self):
-        query = '''
+        folder_ids = [folder.id for folder in self.get_aggregate_folders()]
+        if not folder_ids:
+            return 0
+        placeholders = ','.join('?' for _ in folder_ids)
+        query = f'''
         SELECT COUNT(id) FROM messages
-        WHERE account_id == ? AND seen == 0 AND imap_deleted == 0
+        WHERE folder_id IN ({placeholders}) AND seen == 0 AND imap_deleted == 0
         '''
-        return self.bringmaildb.select_one_value(query, [self.id], fallback=0)
+        return self.bringmaildb.select_one_value(query, folder_ids, fallback=0)
 
     @property
     def next_refresh(self):
@@ -152,16 +195,23 @@ class Account(ObjectBase):
             'next_refresh': self.next_refresh if self.next_refresh != float('inf') else None,
         }
         if folders or unread_count:
+            account_folders = self.get_folders()
             counts = self.bringmaildb.get_account_unread_counts(self)
         if unread_count:
-            j['unread_count'] = sum(counts.values()) if counts else 0
+            aggregate_ids = {
+                folder.id
+                for folder in self._aggregate_folders_from(account_folders)
+            }
+            j['unread_count'] = sum(
+                counts.get(folder_id, 0) for folder_id in aggregate_ids
+            )
         if folders:
             j['folders'] = [
                 folder.jsonify(
                     unread_count=counts.get(folder.id, 0),
                     message_count=self.bringmaildb.get_folder_message_count(folder),
                 )
-                for folder in self.get_folders()
+                for folder in account_folders
             ]
         return j
 
