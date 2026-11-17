@@ -49,6 +49,9 @@ let messages_rendered = 0;
 let messages_has_more = false;
 let selected_ids = new Set();
 let selection_anchor_id = null;
+// Message ids that were trashed from this view and are still shown in place
+// with the strikethrough class until the view is reloaded.
+let trashed_ids = new Set();
 let messages_request = null;
 
 let current_message_id = null;
@@ -350,6 +353,28 @@ function folder_in_account_view(folder, account) {
     return false;
 }
 
+function folder_in_active_view(folder_id) {
+    const folder = find_folder(folder_id);
+    if (!folder) {
+        return false;
+    }
+    if (active_kind === "folder") {
+        return String(folder.id) === String(active_folder_id);
+    }
+    if (active_kind === "account") {
+        const account = find_account(active_account_id);
+        return Boolean(account && folder_in_account_view(folder, account));
+    }
+    if (active_kind === "all") {
+        for (const account of accounts_data) {
+            if (folder_in_account_view(folder, account)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function adjust_unread(folder_id, delta) {
     for (const account of accounts_data) {
         const folder = account.folders.find(item => String(item.id) === String(folder_id));
@@ -393,9 +418,9 @@ function select_all_accounts() {
     history.replaceState(null, "", "/all");
 
     update_active_classes();
-    build_move_options();
     set_active_title("All accounts / Inbox + Sent");
     load_messages(true);
+    build_move_options();
 }
 
 function select_account(account_id) {
@@ -411,9 +436,9 @@ function select_account(account_id) {
     history.replaceState(null, "", `/account/${account.id}`);
 
     update_active_classes();
-    build_move_options();
     set_active_title(`${account.display_name} / Inbox + Sent`);
     load_messages(true);
+    build_move_options();
 }
 
 function select_folder(folder_id) {
@@ -438,9 +463,9 @@ function select_folder(folder_id) {
     }
 
     update_active_classes();
-    build_move_options();
     set_active_title(account ? `${account.display_name} / ${folder.display_name}` : folder.display_name);
     load_messages(true);
+    build_move_options();
 }
 
 function build_move_options() {
@@ -457,11 +482,18 @@ function build_move_options() {
         return;
     }
     select.disabled = false;
+    // A trashed message is no longer in the active folder, so that folder has
+    // to remain a valid destination while trashed rows are still on screen.
+    const include_active_folder = active_kind === "folder" && trashed_ids.size > 0;
     for (const folder of account.folders) {
         if (!folder.selectable) {
             continue;
         }
-        if (active_kind === "folder" && String(folder.id) === String(active_id)) {
+        if (
+            active_kind === "folder" &&
+            String(folder.id) === String(active_id) &&
+            !include_active_folder
+        ) {
             continue;
         }
         const option = document.createElement("option");
@@ -488,6 +520,7 @@ function load_messages(reset) {
         messages_has_more = false;
         selected_ids = new Set();
         selection_anchor_id = null;
+        trashed_ids = new Set();
         common.delete_all_children(messages_element);
         messages_element.scrollTop = 0;
         clear_reader();
@@ -566,6 +599,9 @@ function create_message_row(message) {
     row.dataset.date = message.date_unix;
     if (!message.seen) {
         row.classList.add("unread");
+    }
+    if (trashed_ids.has(String(message.id))) {
+        row.classList.add("trashed");
     }
     if (selected_ids.has(String(message.id))) {
         row.classList.add("message_selected");
@@ -740,6 +776,44 @@ function set_seen_local(message_id, seen) {
         adjust_unread(message.folder_id, -1);
     } else if (!was_unread && !seen) {
         adjust_unread(message.folder_id, +1);
+    }
+}
+
+function trash_folder_for_account(account_id) {
+    const account = find_account(account_id);
+    if (!account) {
+        return null;
+    }
+    const folder = account.folders.find(item => item.special_use === "\\Trash");
+    return folder ? folder.id : null;
+}
+
+function mark_trashed_local(message_id) {
+    message_id = String(message_id);
+    trashed_ids.add(message_id);
+    const message = find_message(message_id);
+    if (message) {
+        const trash_folder_id = trash_folder_for_account(message.account_id);
+        if (trash_folder_id !== null) {
+            message.folder_id = trash_folder_id;
+        }
+    }
+    const row = message_row(message_id);
+    if (row) {
+        row.classList.add("trashed");
+    }
+}
+
+function untrash_local(message_id, folder_id) {
+    message_id = String(message_id);
+    trashed_ids.delete(message_id);
+    const message = find_message(message_id);
+    if (message && folder_id !== undefined && folder_id !== null) {
+        message.folder_id = folder_id;
+    }
+    const row = message_row(message_id);
+    if (row) {
+        row.classList.remove("trashed");
     }
 }
 
@@ -1135,6 +1209,7 @@ function remove_messages_locally(message_ids) {
     }
     for (const message_id of id_set) {
         selected_ids.delete(message_id);
+        trashed_ids.delete(message_id);
     }
     selection_anchor_id = null;
     if (messages_data.length === 0) {
@@ -1155,11 +1230,42 @@ function move_selected() {
         select.value = "";
         return;
     }
+
+    const previously_trashed = new Set(
+        ids.map(String).filter(message_id => trashed_ids.has(String(message_id)))
+    );
+    const target_folder = find_folder(folder_id);
+    const target_is_trash = Boolean(
+        target_folder && target_folder.special_use === "\\Trash"
+    );
+    const target_is_active = (
+        active_kind === "folder" &&
+        String(folder_id) === String(active_folder_id)
+    );
+
     api.messages.batch_move(ids, folder_id, function(response) {
         select.value = "";
         batch_result_handler(response, function(returned_ids) {
-            clear_reader();
-            remove_messages_locally(returned_ids);
+            const to_remove = [];
+            for (const message_id of returned_ids) {
+                if (previously_trashed.has(String(message_id))) {
+                    if (target_is_trash) {
+                        // Moving to trash again is a no-op; keep the row trashed.
+                        continue;
+                    }
+                    untrash_local(message_id, folder_id);
+                    if (!folder_in_active_view(folder_id)) {
+                        to_remove.push(message_id);
+                    }
+                } else if (!target_is_active) {
+                    to_remove.push(message_id);
+                }
+            }
+            if (to_remove.length) {
+                clear_reader();
+                remove_messages_locally(to_remove);
+            }
+            build_move_options();
             load_accounts();
         });
     });
@@ -1170,15 +1276,40 @@ function delete_selected() {
     if (ids.length === 0) {
         return;
     }
-    if (!confirm(`Delete ${ids.length} message(s)?`)) {
-        return;
+    // Show the messages as trashed immediately and assume the server request
+    // will succeed. The rows stay in place with a strikethrough instead of
+    // being removed; the next reload of this view drops them because they now
+    // belong to the trash folder.
+    const previous_state = new Map();
+    for (const message_id of ids) {
+        const state = {
+            trashed: trashed_ids.has(String(message_id)),
+            folder_id: null,
+        };
+        const message = find_message(message_id);
+        if (message) {
+            state.folder_id = message.folder_id;
+        }
+        previous_state.set(String(message_id), state);
+        mark_trashed_local(message_id);
     }
+    build_move_options();
+
     api.messages.batch_delete(ids, function(response) {
-        batch_result_handler(response, function(returned_ids) {
-            clear_reader();
-            remove_messages_locally(returned_ids);
-            load_accounts();
-        });
+        if (!api_was_ok(response)) {
+            // Roll the optimistic strikethrough back for the rows that were
+            // not already trashed before this request.
+            for (const [message_id, state] of previous_state) {
+                if (state.trashed) {
+                    continue;
+                }
+                untrash_local(message_id, state.folder_id);
+            }
+            build_move_options();
+            show_api_error(response);
+            return;
+        }
+        load_accounts();
     });
 }
 

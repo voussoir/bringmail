@@ -19,12 +19,21 @@ class FakeSessionClient:
         self.added_flags = []
         self.removed_flags = []
         self.moved = []
+        self.copied = []
+        self.expunged = []
+        self.searches = []
         self.logged_out = False
         self.noops = 0
+        self.move_supported = True
+        self.copyuid = True
+        self.header_search_results = [42]
 
     def select_folder(self, name, readonly=False):
         self.selected = name
         return {b'UIDVALIDITY': 1, b'UIDNEXT': 2}
+
+    def capabilities(self):
+        return (b'IMAP4rev1', b'MOVE')
 
     def add_flags(self, messages, flags):
         self.added_flags.append((list(messages), list(flags)))
@@ -34,11 +43,27 @@ class FakeSessionClient:
 
     def move(self, messages, folder):
         self.moved.append((list(messages), folder))
-        return b'OK'
+        if not self.move_supported:
+            raise RuntimeError('The server does not support MOVE.')
+        if not self.copyuid:
+            return b'Move completed.'
+        source = ','.join(str(message) for message in messages)
+        return f'[COPYUID 1 {source} 42] Move completed.'.encode('ascii')
+
+    def copy(self, messages, folder):
+        self.copied.append((list(messages), folder))
+        if not self.copyuid:
+            return b'Copy completed.'
+        source = ','.join(str(message) for message in messages)
+        return f'[COPYUID 1 {source} 42] Copy completed.'.encode('ascii')
+
+    def expunge(self, messages):
+        self.expunged.append(list(messages))
 
     def search(self, criteria):
+        self.searches.append(criteria)
         if criteria and criteria[0].upper() == 'HEADER':
-            return [42]
+            return list(self.header_search_results)
         return []
 
     def noop(self):
@@ -161,6 +186,85 @@ class SessionTest(unittest.TestCase):
         )
         self.assertEqual(row['folder_id'], trash.id)
         self.assertEqual(row['uid'], 42)
+
+    def make_archive(self):
+        with self.db.transaction:
+            return self.db.add_folder(
+                account=self.account,
+                name='Archive',
+                display_name='Archive',
+                delimiter='/',
+            )
+
+    def test_move_uses_copyuid_without_searching(self):
+        archive = self.make_archive()
+
+        with mock.patch('bringmail.helpers.connect_imap', return_value=self.client):
+            self.message.move_to(archive)
+
+        self.assertEqual(self.message.folder_id, archive.id)
+        self.assertEqual(self.message.uid, 42)
+        self.assertEqual(self.message.uidvalidity, 1)
+        self.assertEqual(self.client.searches, [])
+
+    def test_move_falls_back_to_search_without_copyuid(self):
+        self.client.copyuid = False
+        archive = self.make_archive()
+
+        with mock.patch('bringmail.helpers.connect_imap', return_value=self.client):
+            self.message.move_to(archive)
+
+        self.assertEqual(self.message.folder_id, archive.id)
+        self.assertEqual(self.message.uid, 42)
+        self.assertTrue(self.client.searches)
+
+    def test_move_uses_newest_uid_when_message_id_matches_multiple(self):
+        self.client.copyuid = False
+        self.client.header_search_results = [42, 57]
+        archive = self.make_archive()
+
+        with mock.patch('bringmail.helpers.connect_imap', return_value=self.client):
+            self.message.move_to(archive)
+
+        self.assertEqual(self.message.folder_id, archive.id)
+        self.assertEqual(self.message.uid, 57)
+        self.assertEqual(self.message.uidvalidity, 1)
+
+    def test_move_falls_back_to_copy_when_move_is_unsupported(self):
+        self.client.move_supported = False
+        archive = self.make_archive()
+
+        with mock.patch('bringmail.helpers.connect_imap', return_value=self.client):
+            self.message.move_to(archive)
+
+        self.assertEqual(self.client.copied, [([1], 'Archive')])
+        self.assertEqual(self.client.expunged, [[1]])
+        self.assertEqual(self.message.folder_id, archive.id)
+        self.assertEqual(self.message.uid, 42)
+        self.assertEqual(self.message.uidvalidity, 1)
+        self.assertEqual(self.client.searches, [])
+
+    def test_copyuid_from_untagged_ok(self):
+        class StubIMAP:
+            untagged_responses = {'OK': [b'[COPYUID 9 5 90] Done']}
+
+        class StubClient:
+            _imap = StubIMAP()
+
+        copyuid = helpers.copyuid_from_response(StubClient(), b'Done')
+        self.assertEqual(copyuid, (9, {5: 90}))
+
+    def test_copyuid_from_tagged_response_code(self):
+        # imapclient's move() returns None, and imaplib keeps the contents of
+        # a tagged [COPYUID ...] response code in its own response map.
+        class StubIMAP:
+            untagged_responses = {'COPYUID': [b'9 5 90']}
+
+        class StubClient:
+            _imap = StubIMAP()
+
+        copyuid = helpers.copyuid_from_response(StubClient(), None)
+        self.assertEqual(copyuid, (9, {5: 90}))
 
 
 if __name__ == '__main__':

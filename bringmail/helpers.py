@@ -796,6 +796,148 @@ def enable_condstore(client):
     return True
 
 
+COPYUID_RE = re.compile(
+    rb'\[COPYUID\s+(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\]',
+    re.IGNORECASE,
+)
+# imaplib stores the contents of a [COPYUID ...] response code under its own
+# untagged_responses key, with the brackets removed.
+COPYUID_DATA_RE = re.compile(
+    rb'^\s*(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\s*$',
+)
+
+
+def _response_bytes(value):
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode('ascii', 'replace')
+    return None
+
+
+def _parse_uid_set(text):
+    uids = []
+    for part in text.split(b','):
+        part = part.strip()
+        if not part:
+            continue
+        if b':' in part:
+            (start, end) = part.split(b':', 1)
+            start = int(start)
+            end = int(end)
+            if end < start or end - start > 1000:
+                raise ValueError(text)
+            uids.extend(range(start, end + 1))
+        else:
+            uids.append(int(part))
+    return uids
+
+
+def _copyuid_from_match(match):
+    try:
+        uidvalidity = int(match.group(1))
+        source_uids = _parse_uid_set(match.group(2))
+        destination_uids = _parse_uid_set(match.group(3))
+    except ValueError:
+        return None
+    if not source_uids or len(source_uids) != len(destination_uids):
+        return None
+    return (uidvalidity, dict(zip(source_uids, destination_uids)))
+
+
+def parse_copyuid(value):
+    '''
+    Parse a COPYUID response code (RFC 4315) from a response string.
+
+    The bracketed "[COPYUID uidvalidity source-uids destination-uids]" form
+    is what imapclient returns for UID COPY. The bare "<uidvalidity>
+    <source-uids> <destination-uids>" form is how imaplib stores the contents
+    of the response code in its untagged_responses map.
+    '''
+    value = _response_bytes(value)
+    if not value:
+        return None
+    match = COPYUID_RE.search(value)
+    if match is not None:
+        return _copyuid_from_match(match)
+    match = COPYUID_DATA_RE.match(value)
+    if match is not None:
+        return _copyuid_from_match(match)
+    return None
+
+
+def _untagged_values(client, name):
+    imap = getattr(client, '_imap', None)
+    untagged = getattr(imap, 'untagged_responses', None)
+    if not untagged:
+        return []
+    values = []
+    for key in (name, name.encode('ascii')):
+        try:
+            entries = untagged.get(key) or []
+        except (AttributeError, TypeError):
+            entries = []
+        for value in entries:
+            value = _response_bytes(value)
+            if value is not None:
+                values.append(value)
+    return values
+
+
+def untagged_ok_responses(client):
+    '''
+    Return the untagged OK response texts currently queued on the imapclient
+    connection.
+    '''
+    return _untagged_values(client, 'OK')
+
+
+def untagged_copyuid_responses(client):
+    '''
+    Return the COPYUID response-code entries queued on the imapclient
+    connection. imaplib records both tagged and untagged COPYUID codes here,
+    with the surrounding brackets removed.
+    '''
+    return _untagged_values(client, 'COPYUID')
+
+
+def copyuid_from_response(client, response, *, before=(), before_copyuid=()):
+    '''
+    Find the COPYUID mapping for a UID COPY or UID MOVE command.
+
+    imapclient returns the tagged response data for UID COPY, but its MOVE
+    wrapper returns None because imaplib's UID handler only returns untagged
+    FETCH data. The COPYUID code is still queued in imaplib's
+    untagged_responses map, so both locations are checked.
+    '''
+    candidates = []
+    if isinstance(response, (list, tuple)):
+        candidates.extend(response)
+    elif response is not None:
+        candidates.append(response)
+    for value in candidates:
+        parsed = parse_copyuid(value)
+        if parsed is not None:
+            return parsed
+
+    before = set(before)
+    for value in untagged_ok_responses(client):
+        if value in before:
+            continue
+        parsed = parse_copyuid(value)
+        if parsed is not None:
+            return parsed
+
+    before_copyuid = set(before_copyuid)
+    for value in untagged_copyuid_responses(client):
+        if value in before_copyuid:
+            continue
+        parsed = parse_copyuid(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 # Authenticated sessions are kept open across message actions so that clicking
 # through a mailbox does not perform a full IMAP login for every read / flag /
 # move. Sync itself uses its own short-lived connection.

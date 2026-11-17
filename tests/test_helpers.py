@@ -124,6 +124,23 @@ class HelpersTest(unittest.TestCase):
         )
         self.assertEqual(helpers.folder_depth('INBOX/Subfolder', b'/'), 1)
 
+    def test_parse_copyuid(self):
+        self.assertEqual(
+            helpers.parse_copyuid(b'[COPYUID 1234 1 5678] Move completed.'),
+            (1234, {1: 5678}),
+        )
+        self.assertEqual(
+            helpers.parse_copyuid('[COPYUID 1 7:8 20:21] OK'),
+            (1, {7: 20, 8: 21}),
+        )
+        self.assertEqual(
+            helpers.parse_copyuid(b'1 42 57'),
+            (1, {42: 57}),
+        )
+        self.assertIsNone(helpers.parse_copyuid(b'Move completed.'))
+        self.assertIsNone(helpers.parse_copyuid(None))
+        self.assertIsNone(helpers.parse_copyuid(b'[COPYUID 1 1:2 5] OK'))
+
     def test_date_fallback(self):
         internaldate = datetime.datetime(2025, 5, 4, 3, 2, 1, tzinfo=datetime.timezone.utc)
         raw = (

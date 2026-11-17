@@ -300,6 +300,22 @@ body.layout_lmr #content_body
     font-weight: bold;
 }
 
+/* A message trashed from this view remains in the list with a strikethrough
+   until the view is reloaded. */
+#message_list .message.trashed,
+#message_list .message.trashed .from,
+#message_list .message.trashed .subject,
+#message_list .message.trashed .date,
+#message_list .message.trashed .attachment
+{
+    text-decoration: line-through;
+}
+
+#message_list .message.trashed
+{
+    opacity: 0.6;
+}
+
 #message_list .message .from,
 #message_list .message .subject
 {

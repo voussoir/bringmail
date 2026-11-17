@@ -560,31 +560,114 @@ class Message(ObjectBase):
 
         account = self.account
         source = self.folder
+        previous_uid = self.uid
+        previous_uidvalidity = self.uidvalidity
 
         def operation(client):
             client.select_folder(source.name, readonly=False)
+
+            # A move/copy assigns the message a new UID in the destination
+            # folder. UIDPLUS servers report that UID in a COPYUID response
+            # code, which lets the local row follow the message directly.
+            before_ok = helpers.untagged_ok_responses(client)
+            before_copyuid = helpers.untagged_copyuid_responses(client)
             try:
-                client.move([self.uid], folder.name)
+                response = client.move([self.uid], folder.name)
             except Exception:
-                client.copy([self.uid], folder.name)
+                response = client.copy([self.uid], folder.name)
+                copyuid = helpers.copyuid_from_response(
+                    client,
+                    response,
+                    before=before_ok,
+                    before_copyuid=before_copyuid,
+                )
                 client.add_flags([self.uid], [b'\\Deleted'])
                 client.expunge([self.uid])
+            else:
+                copyuid = helpers.copyuid_from_response(
+                    client,
+                    response,
+                    before=before_ok,
+                    before_copyuid=before_copyuid,
+                )
 
+            if copyuid is not None:
+                (new_uidvalidity, uid_mapping) = copyuid
+                moved_uid = uid_mapping.get(self.uid)
+                if moved_uid is not None:
+                    log.debug(
+                        'COPYUID for message %s: source uid %s -> destination uid %s, '
+                        'destination uidvalidity %s.',
+                        self.id,
+                        self.uid,
+                        moved_uid,
+                        new_uidvalidity,
+                    )
+                    return (moved_uid, new_uidvalidity, 'copyuid')
+            else:
+                log.debug(
+                    'The move response for message %s to "%s" did not include a '
+                    'usable COPYUID: %r',
+                    self.id,
+                    folder.name,
+                    response,
+                )
+                try:
+                    capabilities = client.capabilities()
+                except Exception:
+                    capabilities = ()
+                log.debug('IMAP capabilities: %s', capabilities)
+
+            # Servers without UIDPLUS (or a usable COPYUID) require a search
+            # in the destination folder to discover the new UID.
             new_uid = None
             new_uidvalidity = None
-            try:
-                selected = client.select_folder(folder.name, readonly=False)
-                new_uidvalidity = selected.get(b'UIDVALIDITY')
-                if self.message_id:
-                    found = client.search(['HEADER', 'Message-ID', self.message_id])
+            if not self.message_id:
+                log.warning(
+                    'Message %s has no Message-ID header; cannot search for its '
+                    'new UID in "%s".',
+                    self.id,
+                    folder.name,
+                )
+            else:
+                try:
+                    selected = client.select_folder(folder.name, readonly=False)
+                    new_uidvalidity = selected.get(b'UIDVALIDITY')
+                    found = [
+                        int(uid)
+                        for uid in client.search(['HEADER', 'Message-ID', self.message_id])
+                    ]
+                    log.debug(
+                        'Message-ID search for message %s in "%s" returned UIDs %s.',
+                        self.id,
+                        folder.name,
+                        found,
+                    )
                     if len(found) == 1:
-                        new_uid = int(found[0])
-            except Exception:
-                log.debug('Could not locate moved message in destination folder.')
-            return (new_uid, new_uidvalidity)
+                        new_uid = found[0]
+                    elif len(found) > 1:
+                        # A new copy is assigned the highest UID in the
+                        # mailbox. If the destination already held another
+                        # copy of this message, the moved copy is the newest.
+                        new_uid = max(found)
+                        log.warning(
+                            'Multiple copies of message %s match in "%s"; '
+                            'using the newest UID %s.',
+                            self.id,
+                            folder.name,
+                            new_uid,
+                        )
+                except Exception:
+                    log.warning(
+                        'Could not search for message %s in "%s".',
+                        self.id,
+                        folder.name,
+                        exc_info=True,
+                    )
+            return (new_uid, new_uidvalidity, 'search')
 
         try:
-            (new_uid, new_uidvalidity) = helpers.imap_call(account, operation)
+            (new_uid, new_uidvalidity, uid_source) = helpers.imap_call(account, operation)
         except exceptions.BringException:
             raise
         except Exception as exc:
@@ -603,9 +686,27 @@ class Message(ObjectBase):
                 self.uid = new_uid
                 self.uidvalidity = new_uidvalidity
                 self._folder = folder
+                log.debug(
+                    'Moved message %s from "%s" to "%s": uid %s -> %s, '
+                    'uidvalidity %s -> %s (uid discovered by %s).',
+                    self.id,
+                    source.name,
+                    folder.name,
+                    previous_uid,
+                    new_uid,
+                    previous_uidvalidity,
+                    new_uidvalidity,
+                    uid_source,
+                )
             else:
                 # We could not discover the new UID. Remove the local row and
                 # let the next destination-folder sync download it again.
+                log.warning(
+                    'Could not determine the destination UID for message %s '
+                    'after moving it to "%s"; deleting the local row.',
+                    self.id,
+                    folder.name,
+                )
                 self.bringmaildb.delete(table=Message, pairs={'id': self.id})
                 self.deleted = True
                 self.bringmaildb.clear_object_caches()

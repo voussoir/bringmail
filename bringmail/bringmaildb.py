@@ -685,6 +685,11 @@ class BDBSyncMixin:
         new_uids = sorted(server_uids - local_uids)
 
         if removed_uids:
+            log.warning(
+                'Folder "%s": local UIDs %s are not present on the server; deleting their rows.',
+                folder.name,
+                sorted(removed_uids),
+            )
             with self.transaction:
                 self.delete_messages_by_uid(folder, removed_uids)
             self.caches[objects.Message].clear()
@@ -692,6 +697,12 @@ class BDBSyncMixin:
         self._sync_folder_flags(client, folder, highestmodseq)
 
         if new_uids:
+            log.debug(
+                'Folder "%s": %d UID(s) present on the server but not locally: %s.',
+                folder.name,
+                len(new_uids),
+                new_uids[:20],
+            )
             header_first = len(new_uids) > constants.HEADER_FIRST_THRESHOLD
             if header_first:
                 self._fetch_headers(client, folder, account, new_uids, progress=progress)
