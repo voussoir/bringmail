@@ -42,6 +42,14 @@ let context_refresh_button = null;
 let context_settings_link = null;
 let context_target = null;
 
+let message_context_menu = null;
+let message_context_title = null;
+let message_context_read_button = null;
+let message_context_unread_button = null;
+let message_context_delete_button = null;
+let message_context_move_list = null;
+let message_context_ids = [];
+
 let accounts_data = [];
 let active_kind = null;
 let active_id = null;
@@ -1230,8 +1238,10 @@ function batch_result_handler(response, action) {
     action(response.data);
 }
 
-function mark_selected(seen) {
-    const ids = selected_or_current_ids();
+function mark_selected(seen, ids) {
+    if (!ids) {
+        ids = selected_or_current_ids();
+    }
     if (ids.length === 0) {
         return;
     }
@@ -1268,15 +1278,8 @@ function remove_messages_locally(message_ids) {
     }
 }
 
-function move_selected() {
-    const select = document.getElementById("move_select");
-    const folder_id = select.value;
-    if (!folder_id) {
-        return;
-    }
-    const ids = selected_or_current_ids();
-    if (ids.length === 0) {
-        select.value = "";
+function move_messages(ids, folder_id) {
+    if (!folder_id || !ids || ids.length === 0) {
         return;
     }
 
@@ -1293,7 +1296,6 @@ function move_selected() {
     );
 
     api.messages.batch_move(ids, folder_id, function(response) {
-        select.value = "";
         batch_result_handler(response, function(returned_ids) {
             const to_remove = [];
             for (const message_id of returned_ids) {
@@ -1320,9 +1322,23 @@ function move_selected() {
     });
 }
 
-function delete_selected() {
+function move_selected() {
+    const select = document.getElementById("move_select");
+    const folder_id = select.value;
+    if (!folder_id) {
+        return;
+    }
     const ids = selected_or_current_ids();
     if (ids.length === 0) {
+        select.value = "";
+        return;
+    }
+    select.value = "";
+    move_messages(ids, folder_id);
+}
+
+function delete_messages(ids) {
+    if (!ids || ids.length === 0) {
         return;
     }
     // Show the messages as trashed immediately and assume the server request
@@ -1360,6 +1376,10 @@ function delete_selected() {
         }
         load_accounts();
     });
+}
+
+function delete_selected() {
+    delete_messages(selected_or_current_ids());
 }
 
 function refresh_account(account_id) {
@@ -1405,6 +1425,90 @@ function show_account_contextmenu(event, kind, id, account_id, title) {
     context_title.textContent = title;
     context_settings_link.href = `/account/${account_id}/settings`;
     contextmenus.show_menu(event, context_menu);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// MESSAGE CONTEXT MENU
+
+function on_messages_contextmenu(event) {
+    const row = event.target.closest(".message");
+    if (!row) {
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const message_id = String(row.dataset.id);
+    if (!selected_ids.has(message_id)) {
+        select_only(message_id);
+    }
+    const ids = get_selected_ids();
+    if (ids.length === 0) {
+        return;
+    }
+    build_message_contextmenu(ids);
+    contextmenus.show_menu(event, message_context_menu);
+}
+
+function build_message_contextmenu(ids) {
+    message_context_ids = ids;
+    if (ids.length === 1) {
+        const message = find_message(ids[0]);
+        message_context_title.textContent = message ? (message.subject || "(no subject)") : "Message";
+    } else {
+        message_context_title.textContent = `${ids.length} messages`;
+    }
+
+    common.delete_all_children(message_context_move_list);
+    const destinations = message_context_destinations(ids);
+    if (destinations.note) {
+        const note = document.createElement("div");
+        note.classList.add("context_note");
+        note.textContent = destinations.note;
+        message_context_move_list.appendChild(note);
+    }
+    for (const folder of destinations.folders) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = folder.display_name || folder.name;
+        button.title = folder.name;
+        button.addEventListener("click", function() {
+            contextmenus.hide_open_menus();
+            move_messages(ids, folder.id);
+        });
+        message_context_move_list.appendChild(button);
+    }
+}
+
+function message_context_destinations(ids) {
+    const messages = ids.map(find_message).filter(Boolean);
+    if (messages.length === 0) {
+        return {folders: [], note: "Move is unavailable."};
+    }
+    const account_id = messages[0].account_id;
+    if (!messages.every(message => String(message.account_id) === String(account_id))) {
+        return {folders: [], note: "Move requires messages from one account."};
+    }
+    const account = find_account(account_id);
+    if (!account) {
+        return {folders: [], note: "Move is unavailable."};
+    }
+    const folder_ids = new Set(messages.map(message => String(message.folder_id)));
+    const current_folder_id = folder_ids.size === 1 ? Array.from(folder_ids)[0] : null;
+    const folders = account.folders.filter(folder => {
+        if (!folder.selectable) {
+            return false;
+        }
+        if (current_folder_id !== null && String(folder.id) === current_folder_id) {
+            return false;
+        }
+        return true;
+    });
+    return {
+        folders: folders,
+        note: folders.length === 0 ? "No other folders." : "",
+    };
 }
 
 
@@ -1759,8 +1863,29 @@ function on_pageload() {
     context_refresh_button = document.getElementById("context_refresh_button");
     context_settings_link = document.getElementById("context_settings_link");
 
+    message_context_menu = document.getElementById("message_contextmenu");
+    message_context_title = document.getElementById("message_context_title");
+    message_context_read_button = document.getElementById("message_context_read_button");
+    message_context_unread_button = document.getElementById("message_context_unread_button");
+    message_context_delete_button = document.getElementById("message_context_delete_button");
+    message_context_move_list = document.getElementById("message_context_move_list");
+
     messages_element.addEventListener("click", on_messages_click);
+    messages_element.addEventListener("contextmenu", on_messages_contextmenu);
     messages_element.addEventListener("scroll", maybe_load_more_messages);
+
+    message_context_read_button.addEventListener("click", function() {
+        contextmenus.hide_open_menus();
+        mark_selected(true, message_context_ids);
+    });
+    message_context_unread_button.addEventListener("click", function() {
+        contextmenus.hide_open_menus();
+        mark_selected(false, message_context_ids);
+    });
+    message_context_delete_button.addEventListener("click", function() {
+        contextmenus.hide_open_menus();
+        delete_messages(message_context_ids);
+    });
 
     document.getElementById("refresh_all_button").addEventListener("click", refresh_all);
     document.getElementById("refresh_folder_button").addEventListener("click", refresh_active);
@@ -1839,6 +1964,7 @@ function on_pageload() {
     hotkeys.register_hotkey("arrowdown", function(event) { navigate(1); }, "Next message.");
     hotkeys.register_hotkey("delete", function(event) { delete_selected(); }, "Delete selected messages.");
     hotkeys.register_help("Click a message to select it. Ctrl-click toggles; Shift-click selects a range.");
+    hotkeys.register_help("Right-click a message for read, delete, and move actions.");
     hotkeys.register_help("Right-click an account or folder for refresh and settings.");
 
     load_accounts(function() {

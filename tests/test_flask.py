@@ -84,7 +84,13 @@ class FlaskTest(unittest.TestCase):
                 b'messages',
                 b'reader',
                 b'account_list',
-                b'message_list'):
+                b'message_list',
+                b'message_contextmenu',
+                b'message_context_title',
+                b'message_context_read_button',
+                b'message_context_unread_button',
+                b'message_context_delete_button',
+                b'message_context_move_list'):
             self.assertIn(b'id="' + element_id + b'"', response.data)
 
     def test_root_has_no_flag_controls(self):

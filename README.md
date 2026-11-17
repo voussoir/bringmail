@@ -35,6 +35,8 @@ Features
 - Read/unread, move to folder, and delete to Trash. Flag state is synchronized
   and retained in the backend, but the web UI does not expose flag controls.
 - Clicking a message's read/unread dot toggles that message without opening it.
+- Right-clicking a message offers Mark as read, Mark as unread, Delete, and
+  Move to folder actions.
 - The reader opens in plaintext mode by default; HTML remains one click away.
   HTML mail is sanitized server-side and rendered inside a sandboxed iframe.
   Remote images are blocked until you click "Load images"; inline `cid:` images

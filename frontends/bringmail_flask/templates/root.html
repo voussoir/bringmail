@@ -76,6 +76,16 @@
         <button id="context_refresh_button">Refresh</button>
         <a id="context_settings_link" href="#">Account settings</a>
     </div>
+
+    <div id="message_contextmenu" class="contextmenu">
+        <b id="message_context_title"></b>
+        <button id="message_context_read_button" type="button">Mark as read</button>
+        <button id="message_context_unread_button" type="button">Mark as unread</button>
+        <button id="message_context_delete_button" type="button">Delete</button>
+        <hr/>
+        <span class="context_heading">Move to</span>
+        <div id="message_context_move_list"></div>
+    </div>
 </div>
 <div id="status_bar" class="panel" aria-live="polite">
     <span id="status_spinner" class="hidden">⌛</span>
