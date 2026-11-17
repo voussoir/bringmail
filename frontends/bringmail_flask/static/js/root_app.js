@@ -9,6 +9,11 @@ const BLOCKED_IMAGE = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
 
 const MESSAGE_PAGE_SIZE = 500;
 
+// Clicking the already-selected account or folder reloads the message list,
+// but a rapid second click (for example the second half of a double-click)
+// must not trigger a second request.
+const RESELECTION_NOOP_MS = 500;
+
 let accounts_element = null;
 let messages_element = null;
 let filter_input = null;
@@ -43,6 +48,8 @@ let active_kind = null;
 let active_id = null;
 let active_account_id = null;
 let active_folder_id = null;
+let last_selection_key = null;
+let last_selection_time = 0;
 
 let messages_data = [];
 let messages_rendered = 0;
@@ -188,7 +195,7 @@ function render_accounts() {
     const all_div = document.createElement("div");
     all_div.classList.add("account", "all_accounts");
     const all_header = document.createElement("div");
-    all_header.classList.add("account_header");
+    all_header.classList.add("account_header", "all_accounts_header");
     all_header.dataset.allAccounts = "1";
 
     const all_icon = document.createElement("span");
@@ -224,6 +231,18 @@ function render_accounts() {
         header.classList.add("account_header");
         header.dataset.accountId = account.id;
 
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.classList.add("collapse_toggle");
+        toggle.addEventListener("click", function(event) {
+            event.stopPropagation();
+            toggle_account_collapsed(account_div, account.id);
+        });
+        toggle.addEventListener("dblclick", function(event) {
+            event.stopPropagation();
+        });
+        header.appendChild(toggle);
+
         const icon = document.createElement("span");
         icon.classList.add("icon");
         icon.textContent = account_icon();
@@ -256,6 +275,7 @@ function render_accounts() {
         });
 
         account_div.appendChild(header);
+        update_collapse_toggle(account_div);
 
         const folders_div = document.createElement("div");
         folders_div.classList.add("folders");
@@ -305,6 +325,17 @@ function render_accounts() {
     build_move_options();
 }
 
+function update_collapse_toggle(account_div) {
+    const toggle = account_div.querySelector(".collapse_toggle");
+    if (!toggle) {
+        return;
+    }
+    const collapsed = account_div.classList.contains("collapsed");
+    toggle.textContent = collapsed ? "▸" : "▾";
+    toggle.title = collapsed ? "Expand account" : "Collapse account";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+}
+
 function toggle_account_collapsed(account_div, account_id) {
     if (account_div.classList.contains("collapsed")) {
         account_div.classList.remove("collapsed");
@@ -313,6 +344,7 @@ function toggle_account_collapsed(account_div, account_id) {
         account_div.classList.add("collapsed");
         localStorage.setItem(`bringmail_collapse_${account_id}`, "1");
     }
+    update_collapse_toggle(account_div);
 }
 
 function update_unread_displays() {
@@ -409,7 +441,27 @@ function update_active_classes() {
     }
 }
 
+function is_duplicate_selection(kind, id) {
+    const key = `${kind}:${id}`;
+    const now = Date.now();
+    const is_active_view = (
+        kind === active_kind &&
+        String(id) === String(active_id)
+    );
+    const is_duplicate = (
+        is_active_view &&
+        key === last_selection_key &&
+        (now - last_selection_time) < RESELECTION_NOOP_MS
+    );
+    last_selection_key = key;
+    last_selection_time = now;
+    return is_duplicate;
+}
+
 function select_all_accounts() {
+    if (is_duplicate_selection("all", "all")) {
+        return;
+    }
     refresh_reload_pending = false;
     active_kind = "all";
     active_id = "all";
@@ -426,6 +478,9 @@ function select_all_accounts() {
 function select_account(account_id) {
     const account = find_account(account_id);
     if (!account) {
+        return;
+    }
+    if (is_duplicate_selection("account", account.id)) {
         return;
     }
     refresh_reload_pending = false;
@@ -447,6 +502,9 @@ function select_folder(folder_id) {
         return;
     }
     if (!folder.selectable) {
+        return;
+    }
+    if (is_duplicate_selection("folder", folder.id)) {
         return;
     }
     refresh_reload_pending = false;

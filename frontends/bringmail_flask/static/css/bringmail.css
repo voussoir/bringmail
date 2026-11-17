@@ -194,6 +194,36 @@ body.layout_lmr #content_body
     user-select: none;
 }
 
+#account_list .account_header
+{
+    grid-template-columns: 1.1em 1.5em minmax(0, 1fr) auto;
+    grid-column-gap: 0.2em;
+}
+
+#account_list .account_header .icon
+{
+    justify-self: start;
+}
+
+#account_list .account_header.all_accounts_header
+{
+    grid-template-columns: 1.5em minmax(0, 1fr) auto;
+}
+
+#account_list .collapse_toggle
+{
+    width: 1.1em;
+    margin: 0;
+    padding: 0 1px 0 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font-size: 90%;
+    line-height: 1;
+    text-align: right;
+    cursor: pointer;
+}
+
 #account_list .account_header:hover,
 #account_list .folder:hover
 {
