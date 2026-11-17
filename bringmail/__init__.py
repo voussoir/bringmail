@@ -5,3 +5,4 @@ from . import helpers
 from . import idle
 from . import idle_supervisor
 from . import objects
+from . import upgrades

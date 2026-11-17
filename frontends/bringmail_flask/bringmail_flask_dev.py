@@ -50,6 +50,7 @@ def bringmail_flask_dev(
         return 1
     except (bringmail.exceptions.SQLiteTooOld,
             bringmail.exceptions.DatabaseOutOfDate,
+            bringmail.exceptions.DatabaseTooNew,
             bringmail.exceptions.BadDataDirectory):
         log.error(traceback.format_exc())
         return 1

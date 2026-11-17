@@ -1092,7 +1092,12 @@ class BringMailDB(
             )
 
     def _check_version(self):
-        existing = self.pragma_read('user_version')
+        existing = int(self.pragma_read('user_version') or 0)
+        if existing > constants.DATABASE_VERSION:
+            raise exceptions.DatabaseTooNew(
+                existing=existing,
+                new=constants.DATABASE_VERSION,
+            )
         if existing != constants.DATABASE_VERSION:
             raise exceptions.DatabaseOutOfDate(
                 existing=existing,

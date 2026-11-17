@@ -167,6 +167,33 @@ If you delete or move a message on the server, the next refresh removes or
 relocates the local row. A UIDVALIDITY change causes that folder's local cache
 to be discarded and re-downloaded.
 
+Upgrading an existing database
+------------------------------
+
+BringMail stores its schema version in SQLite's `user_version`. A newer version
+of BringMail may change the schema and refuse to open an older database. Stop
+the server before upgrading, then run the upgrader from the directory containing
+`_bringmail`:
+
+    python D:\Git\BringMail\utilities\database_upgrader.py
+
+The upgrader finds the closest `_bringmail` directory. You can also pass a data
+directory explicitly:
+
+    python D:\Git\BringMail\utilities\database_upgrader.py D:\bringmail_data\_bringmail
+
+It prints the pending versions first. `--dry-run` stops after that preview,
+`--yes` skips the confirmation, and `--no-backup` disables the copy of
+`bringmail.db` that is made before any changes. The backup contains the same
+plaintext passwords and cached mail as the live database, so keep it protected
+and delete it when it is no longer needed. Each version is applied in its own
+transaction, indices are recreated, and foreign keys are checked before the
+version is committed. If an upgrade fails, that version is rolled back.
+
+Schema migrations live in `bringmail/upgrades.py`. When changing the schema,
+update `constants.DB_INIT`, increment `constants.DATABASE_VERSION`, and add an
+`upgrade_X_to_Y` function decorated with `@upgrade_function(X, Y)`.
+
 Tests
 -----
 
@@ -186,11 +213,13 @@ Architecture
   handling; `idle.py` contains the IDLE protocol session; `idle_supervisor.py`
   contains the reusable watcher threads and reconciliation. Frontends start the
   supervisor explicitly; importing the package does not start any threads.
+  `upgrades.py` contains the schema migration framework.
 - `frontends/bringmail_flask/`: Flask backend and three-panel frontend.
   `backend/common.py` sets up the app, background scheduler, refresh worker, and
   server-sent events. `backend/endpoints/` contains the HTTP API.
 - `frontends/bringmail_cli.py` and `frontends/bringmail_repl.py`: command-line
   management and an interactive database shell.
+- `utilities/database_upgrader.py`: applies pending schema migrations.
 - `tests/`: unit tests and a small `.eml` fixture.
 
 Not implemented

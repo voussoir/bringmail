@@ -7,6 +7,8 @@ BringMail requires SQLite 3.38.0 or newer. Generated columns were added in
 separately compiled JSON1 extension. See bringmail.exceptions.SQLiteTooOld.
 '''
 
+# Increment this when DB_INIT changes, and add a matching upgrade function in
+# bringmail/upgrades.py so existing databases can be brought forward.
 DATABASE_VERSION = 1
 
 MINIMUM_SQLITE = (3, 38, 0)

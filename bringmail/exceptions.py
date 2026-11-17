@@ -135,8 +135,26 @@ class DatabaseOutOfDate(BringException):
     '''
     error_message = '''
 Database is out of date. {existing} should be {new}.
-Please run the database upgrader or use a database created by this version.
+Please stop BringMail and run utilities/database_upgrader.py.
 '''.strip()
+
+
+class DatabaseTooNew(BringException):
+    '''
+    Raised by BringMailDB.__init__ if the database was created by a newer copy
+    of BringMail than the one that is running.
+    '''
+    error_message = '''
+Database version {existing} is newer than this copy of BringMail supports ({new}).
+Use a newer copy of BringMail or restore a backup from before the upgrade.
+'''.strip()
+
+
+class DatabaseUpgradeError(BringException):
+    '''
+    Raised by bringmail.upgrades when a migration cannot be applied safely.
+    '''
+    error_message = '{}'
 
 
 class SQLiteTooOld(BringException):
