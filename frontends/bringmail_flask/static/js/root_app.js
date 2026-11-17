@@ -17,7 +17,6 @@ const RESELECTION_NOOP_MS = 500;
 let accounts_element = null;
 let messages_element = null;
 let filter_input = null;
-let active_title_element = null;
 let accounts_spinner = null;
 let news_spinner = null;
 let reader_spinner = null;
@@ -163,10 +162,6 @@ function folder_icon(folder) {
         "\\Archive": "🗄",
     };
     return icons[folder.special_use] || "📁";
-}
-
-function set_active_title(text) {
-    active_title_element.textContent = text || "";
 }
 
 
@@ -470,7 +465,6 @@ function select_all_accounts() {
     history.replaceState(null, "", "/all");
 
     update_active_classes();
-    set_active_title("All accounts / Inbox + Sent");
     load_messages(true);
     build_move_options();
 }
@@ -491,7 +485,6 @@ function select_account(account_id) {
     history.replaceState(null, "", `/account/${account.id}`);
 
     update_active_classes();
-    set_active_title(`${account.display_name} / Inbox + Sent`);
     load_messages(true);
     build_move_options();
 }
@@ -514,14 +507,12 @@ function select_folder(folder_id) {
     active_folder_id = folder.id;
     history.replaceState(null, "", `/folder/${folder.id}`);
 
-    const account = find_account(folder.account_id);
     const account_div = accounts_element.querySelector(`.account[data-account-id="${folder.account_id}"]`);
     if (account_div && account_div.classList.contains("collapsed")) {
         toggle_account_collapsed(account_div, folder.account_id);
     }
 
     update_active_classes();
-    set_active_title(account ? `${account.display_name} / ${folder.display_name}` : folder.display_name);
     load_messages(true);
     build_move_options();
 }
@@ -1669,7 +1660,6 @@ function figure_initial_selection() {
 
     const first_account = accounts_data[0];
     if (!first_account) {
-        set_active_title("No accounts yet. Use +Account to add one.");
         return;
     }
     const inbox = first_account.folders.find(folder => folder.special_use === "\\Inbox");
@@ -1685,7 +1675,6 @@ function on_pageload() {
     accounts_element = document.getElementById("account_list");
     messages_element = document.getElementById("message_list");
     filter_input = document.getElementById("filter_input");
-    active_title_element = document.getElementById("active_title");
 
     accounts_spinner = new spinners.Spinner(document.getElementById("accounts_loading_spinner"));
     news_spinner = new spinners.Spinner(document.getElementById("news_loading_spinner"));
