@@ -540,6 +540,72 @@ class BDBSyncMixin:
         )
         return error
 
+    def sync_folder(self, account, folder, progress=None):
+        '''
+        Synchronize one folder. Returns None on success, or a traceback string
+        on failure.
+
+        This is the targeted counterpart to sync_account. It deliberately does
+        not update account.last_refresh or account.last_refresh_attempt, so an
+        IDLE-triggered sync does not postpone the account's scheduled refresh.
+        Callers must serialize syncs; the frontend uses one refresh worker.
+        '''
+        if not isinstance(account, objects.Account):
+            raise TypeError(account)
+        if not isinstance(folder, objects.Folder):
+            raise TypeError(folder)
+        account.assert_not_deleted()
+        folder.assert_not_deleted()
+
+        if folder.account_id != account.id:
+            raise exceptions.InvalidFolder('Folder does not belong to this account.')
+        if not folder.is_selectable:
+            raise exceptions.FolderNotSelectable(folder.name)
+
+        self._progress(
+            progress,
+            stage='folder_start',
+            account_id=account.id,
+            folder_id=folder.id,
+            folder_name=folder.name,
+            index=0,
+            total=1,
+        )
+
+        error = None
+        try:
+            client = helpers.connect_imap(account)
+            try:
+                helpers.enable_condstore(client)
+                self._sync_folder(client, folder, account, progress=progress)
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+        except Exception:
+            error = traceback.format_exc()
+            log.warning('Refreshing %s raised:\n%s', folder, error)
+            with self.transaction:
+                self.update(
+                    table=objects.Folder,
+                    pairs={'id': folder.id, 'last_sync_error': error},
+                    where_key='id',
+                )
+            folder.last_sync_error = error
+
+        self._progress(
+            progress,
+            stage='folder_finished',
+            account_id=account.id,
+            folder_id=folder.id,
+            folder_name=folder.name,
+            index=0,
+            total=1,
+            error=error,
+        )
+        return error
+
     def _sync_account_with_client(self, client, account, progress=None):
         server_folders = client.list_folders()
         self._progress(progress, stage='folders', account_id=account.id, total=len(server_folders))

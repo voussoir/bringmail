@@ -97,7 +97,9 @@ def get_all_messages_json():
 @site.route('/folder/<folder_id>/refresh', methods=['POST'])
 def post_folder_refresh(folder_id):
     folder = common.get_folder(folder_id, response_type='json')
-    common.add_account_to_refresh_queue(folder.account)
+    if not folder.is_selectable:
+        return flasktools.json_response({}, status=400)
+    common.add_folder_to_refresh_queue(folder, manual=True)
     return flasktools.json_response({})
 
 

@@ -72,6 +72,8 @@ def bringmail_flask_dev(
     except KeyboardInterrupt:
         log.info('Goodbye')
         return 0
+    finally:
+        backend.common.stop_background_threads()
 
 
 def bringmail_flask_dev_argparse(args):

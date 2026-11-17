@@ -29,6 +29,18 @@ FETCH_BATCH_FULL = 5
 FETCH_BATCH_FLAGS = 500
 FLAG_BATCH = 500
 
+# IMAP IDLE. RFC 2177 allows a client to remain idle for up to 29 minutes,
+# but some servers use shorter inactivity timeouts, so renew sooner.
+IDLE_RENEW_SECONDS = 9 * 60
+# The poll timeout is a local wake-up for shutdown and renewal checks. It does
+# not send traffic to the server.
+IDLE_POLL_SECONDS = 5
+IDLE_DEBOUNCE_SECONDS = 2
+IDLE_RECONNECT_MIN_SECONDS = 5
+IDLE_RECONNECT_MAX_SECONDS = 5 * 60
+IDLE_UNSUPPORTED_RETRY_SECONDS = 60 * 60
+IDLE_STARTUP_STAGGER_SECONDS = 1
+
 # When importing a folder for the first time and more than this many messages
 # are new, fetch headers for everything first and then fill in the bodies
 # newest-first. This keeps the UI usable while a large archive downloads.

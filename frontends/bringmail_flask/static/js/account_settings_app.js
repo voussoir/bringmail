@@ -181,6 +181,35 @@ function copy_last_refresh_error() {
     }
 }
 
+function load_idle_status() {
+    const account_id = get_account_id();
+    const checkbox = document.getElementById("idle_status_input");
+    const detail = document.getElementById("idle_status_detail");
+    if (!account_id || !checkbox || !detail) {
+        return;
+    }
+    http.get({url: "/idle/status.json", callback: function(response) {
+        if (!response.meta.completed || !response.meta.json_ok || response.meta.status !== 200) {
+            checkbox.checked = false;
+            detail.textContent = "unavailable";
+            return;
+        }
+        const entry = response.data[account_id];
+        if (!entry) {
+            checkbox.checked = false;
+            detail.textContent = "not running (waiting for INBOX)";
+            return;
+        }
+        checkbox.checked = entry.state === "connected";
+        let text = entry.state;
+        if (entry.detail) {
+            text += ` (${entry.detail})`;
+        }
+        detail.textContent = text;
+        checkbox.title = `IMAP IDLE: ${text}`;
+    }});
+}
+
 document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("save_button").addEventListener("click", save_account);
     const test_button = document.getElementById("test_button");
@@ -191,4 +220,5 @@ document.addEventListener("DOMContentLoaded", function() {
     if (copy_error_button) {
         copy_error_button.addEventListener("click", copy_last_refresh_error);
     }
+    load_idle_status();
 });

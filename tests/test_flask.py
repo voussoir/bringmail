@@ -14,6 +14,7 @@ from bringmail import constants
 from bringmail import helpers
 
 from bringmail_flask import backend
+from bringmail_flask.backend import common
 
 FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'simple.eml')
 
@@ -109,11 +110,14 @@ class FlaskTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Add account', response.data)
         self.assertNotIn(b'Themes:', response.data)
+        self.assertNotIn(b'id="idle_status_input"', response.data)
 
         response = self.client.get(f'/account/{self.account.id}/settings')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Inbox', response.data)
         self.assertNotIn(b'Themes:', response.data)
+        self.assertIn(b'id="idle_status_input"', response.data)
+        self.assertIn(b'id="idle_status_detail"', response.data)
 
         response = self.client.get('/about')
         self.assertEqual(response.status_code, 200)
@@ -326,6 +330,44 @@ class FlaskTest(unittest.TestCase):
             headers={'X-BringMail-Request': '1'},
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_idle_status_endpoint(self):
+        response = self.client.get('/idle/status.json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {})
+
+    def test_folder_refresh_enqueues_folder_job(self):
+        common.clear_refresh_queue()
+        response = self.client.post(
+            f'/folder/{self.folder.id}/refresh',
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        (priority, _, job) = common.REFRESH_QUEUE.get_nowait()
+        self.assertEqual(priority, 0)
+        self.assertEqual(job.account_id, self.account.id)
+        self.assertEqual(job.folder_id, self.folder.id)
+        self.assertTrue(job.manual)
+
+    def test_manual_folder_job_precedes_automatic_account_job(self):
+        common.clear_refresh_queue()
+        common.add_account_to_refresh_queue(self.account)
+        common.add_folder_to_refresh_queue(self.folder, manual=True)
+
+        (first_priority, _, first_job) = common.REFRESH_QUEUE.get_nowait()
+        (second_priority, _, second_job) = common.REFRESH_QUEUE.get_nowait()
+
+        self.assertEqual(first_priority, 0)
+        self.assertEqual(first_job.folder_id, self.folder.id)
+        self.assertEqual(second_priority, 1)
+        self.assertIsNone(second_job.folder_id)
+
+    def test_refresh_queue_deduplicates_same_job(self):
+        common.clear_refresh_queue()
+        common.add_folder_to_refresh_queue(self.folder)
+        common.add_folder_to_refresh_queue(self.folder)
+        self.assertEqual(common.REFRESH_QUEUE.qsize(), 1)
 
 
 if __name__ == '__main__':

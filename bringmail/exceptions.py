@@ -116,6 +116,10 @@ class MailServerActionError(MailServerError):
     error_message = 'The mail server refused the action: {}'
 
 
+class IdleUnsupported(MailServerError):
+    error_message = 'The mail server does not advertise the IMAP IDLE capability.'
+
+
 # DATABASE #########################################################################################
 
 class BadDataDirectory(BringException):

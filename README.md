@@ -23,6 +23,11 @@ Features
 - An All accounts entry combines those INBOX/SENT views across every account.
 - Incremental synchronization using UIDVALIDITY, UIDNEXT, and CONDSTORE where
   the server supports them.
+- IMAP IDLE push for each account's INBOX when the server advertises it. Each
+  watched INBOX holds one IMAP connection, and there is no per-account toggle.
+  IDLE keeps the account tree and unread counts current; it does not reload the
+  message list or reader. Re-select the account or folder to load messages.
+  Servers without IDLE continue to use the scheduled refresh.
 - Every message body is downloaded during refresh and stored locally, so every
   message you have synced is available offline.
 - Optional header-first import of large folders: the message list becomes
@@ -134,9 +139,10 @@ Running in production
     gunicorn bringmail_flask_prod:site --bind "127.0.0.1:27465" --worker-class gevent --workers 1
 
 Run it from the directory containing `_bringmail`. Use exactly one worker: each
-worker process would start its own background scheduler and refresh worker,
-causing duplicate IMAP synchronization. If you run it under a different user
-account, that user needs access to the database and any cached credentials in it.
+worker process would start its own background scheduler, refresh worker, and
+IMAP IDLE watchers, causing duplicate connections and synchronization. If you
+run it under a different user account, that user needs access to the database
+and any cached credentials in it.
 
 Database
 --------
@@ -167,8 +173,9 @@ Tests
     python -m unittest discover -s tests -v
 
 The tests cover message parsing, generated-column queries, local flags,
-pagination, incremental fake-IMAP sync, UIDVALIDITY resets, reusable IMAP
-sessions, and the Flask routes. They do not contact a real mail server.
+pagination, incremental and targeted fake-IMAP sync, UIDVALIDITY resets,
+reusable IMAP sessions, IMAP IDLE sessions and watchers, database schema
+upgrades, and the Flask routes. They do not contact a real mail server.
 
 Architecture
 ------------
@@ -176,7 +183,9 @@ Architecture
 - `bringmail/`: core package. `objects.py` contains Account, Folder, and
   Message; `bringmaildb.py` contains the database and IMAP sync engine;
   `helpers.py` contains MIME parsing, sanitization, and IMAP connection/session
-  handling.
+  handling; `idle.py` contains the IDLE protocol session; `idle_supervisor.py`
+  contains the reusable watcher threads and reconciliation. Frontends start the
+  supervisor explicitly; importing the package does not start any threads.
 - `frontends/bringmail_flask/`: Flask backend and three-panel frontend.
   `backend/common.py` sets up the app, background scheduler, refresh worker, and
   server-sent events. `backend/endpoints/` contains the HTTP API.
@@ -196,3 +205,5 @@ Not implemented
   downloaded once per folder.
 - Offline queueing of write actions. Reading the cache works offline; marking
   read, moving, and deleting require a working mail server connection.
+- IDLE watches only INBOX. Mail that lands in other folders is picked up by the
+  scheduled refresh; watching more folders would require one connection each.

@@ -40,3 +40,10 @@ def get_sse():
     response = flask.Response(flasktools.sse_generator(), mimetype='text/event-stream')
     response.direct_passthrough = True
     return response
+
+
+@site.route('/idle/status.json')
+def get_idle_status():
+    if common.supervisor is None:
+        return flasktools.json_response({})
+    return flasktools.json_response(common.supervisor.status())

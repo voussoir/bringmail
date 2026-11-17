@@ -1573,6 +1573,10 @@ function finish_refresh_queue() {
 // SSE
 
 function start_sse() {
+    // UI contract: background refreshes, including scheduled syncs and IMAP
+    // IDLE notifications, must never auto-reload the message list or the
+    // reader panel. Only the account tree and unread counts are refreshed;
+    // the user re-clicks the account or folder to load new messages.
     if (sse !== null) {
         sse.close();
     }
@@ -1610,6 +1614,59 @@ function start_sse() {
         }
         finish_refresh_status(payload);
         load_accounts();
+    });
+
+    sse.addEventListener("folder_sync_started", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        begin_refresh_status({
+            id: payload.account_id,
+            display_name: payload.account_name,
+        });
+        update_refresh_status(Object.assign(
+            {},
+            payload,
+            {stage: "folder_start", index: 0, total: 1}
+        ));
+    });
+
+    sse.addEventListener("folder_sync_progress", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        update_refresh_status(payload);
+    });
+
+    sse.addEventListener("folder_sync_finished", function(event) {
+        const payload = JSON.parse(event.data);
+        if (payload.error) {
+            console.warn(payload.error);
+        }
+        finish_refresh_status(payload);
+        load_accounts();
+    });
+
+    sse.addEventListener("idle_state", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        if (payload.state === "retrying" || payload.state === "unsupported") {
+            console.warn(
+                `IMAP IDLE for ${payload.account_name || payload.account_id}:`,
+                payload.state,
+                payload.detail || ""
+            );
+        }
     });
 
     sse.addEventListener("account_refresh_queue_finished", function() {

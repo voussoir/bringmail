@@ -49,7 +49,7 @@ def get_accounts_json():
 @site.route('/accounts/refresh_all', methods=['POST'])
 def post_accounts_refresh_all():
     for account in common.bringdb.get_accounts():
-        common.add_account_to_refresh_queue(account)
+        common.add_account_to_refresh_queue(account, manual=True)
     return flasktools.json_response({})
 
 
@@ -113,6 +113,7 @@ def post_accounts_add():
             return _invalid(f'An account for {username} at {host}:{port} already exists.')
 
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
+    common.reconfigure_idle_supervisor()
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
 
 
@@ -173,6 +174,7 @@ def post_account_update(account_id):
     # Log out any reusable session that was created with the old credentials.
     bringmail.helpers.drop_imap_session(account.id)
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
+    common.reconfigure_idle_supervisor()
 
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
 
@@ -184,13 +186,14 @@ def post_account_delete(account_id):
         account.delete()
     bringmail.helpers.drop_imap_session(account.id)
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
+    common.reconfigure_idle_supervisor()
     return flasktools.json_response({})
 
 
 @site.route('/account/<account_id>/refresh', methods=['POST'])
 def post_account_refresh(account_id):
     account = common.get_account(account_id, response_type='json')
-    common.add_account_to_refresh_queue(account)
+    common.add_account_to_refresh_queue(account, manual=True)
     return flasktools.json_response({})
 
 

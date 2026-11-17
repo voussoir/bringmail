@@ -6,7 +6,9 @@ bringmail_flask_prod.py.
 '''
 import flask
 from flask import request
+import dataclasses
 import functools
+import itertools
 import json
 import queue
 import threading
@@ -52,6 +54,9 @@ site.localhost_only = False
 
 # This is assigned by init_bringdb at launcher startup.
 bringdb = None
+
+# This is assigned by start_background_threads when IMAP IDLE is enabled.
+supervisor = None
 
 # Response wrappers ################################################################################
 
@@ -230,22 +235,49 @@ AUTOREFRESH_THREAD_EVENTS = queue.Queue()
 
 ####################################################################################################
 
-REFRESH_QUEUE = queue.Queue()
+REFRESH_QUEUE = queue.PriorityQueue()
 _REFRESH_QUEUE_SET = set()
 _REFRESH_QUEUE_LOCK = threading.Lock()
+_REFRESH_SEQUENCE = itertools.count()
 
 
-def add_account_to_refresh_queue(account):
+@dataclasses.dataclass(frozen=True)
+class RefreshJob:
+    account_id: int
+    folder_id: int | None = None
+    manual: bool = False
+
+
+def _enqueue_refresh_job(job):
+    key = (job.account_id, job.folder_id)
+    with _REFRESH_QUEUE_LOCK:
+        if key in _REFRESH_QUEUE_SET:
+            return False
+        _REFRESH_QUEUE_SET.add(key)
+
+    # Manual jobs run before automatic ones. The sequence number keeps the
+    # priority queue from ever comparing two RefreshJob objects.
+    priority = 0 if job.manual else 1
+    REFRESH_QUEUE.put((priority, next(_REFRESH_SEQUENCE), job))
+    return True
+
+
+def add_account_to_refresh_queue(account, *, manual=False):
     if not isinstance(account, bringmail.objects.Account):
         account = bringdb.get_account(account)
 
-    with _REFRESH_QUEUE_LOCK:
-        if account.id in _REFRESH_QUEUE_SET:
-            return
-        _REFRESH_QUEUE_SET.add(account.id)
+    job = RefreshJob(account.id, None, manual)
+    if _enqueue_refresh_job(job):
+        log.debug('Adding %s to refresh queue.', account)
 
-    log.debug('Adding %s to refresh queue.', account)
-    REFRESH_QUEUE.put(account.id)
+
+def add_folder_to_refresh_queue(folder, *, manual=False):
+    if not isinstance(folder, bringmail.objects.Folder):
+        folder = bringdb.get_folder(folder)
+
+    job = RefreshJob(folder.account_id, folder.id, manual)
+    if _enqueue_refresh_job(job):
+        log.debug('Adding folder %s to refresh queue.', folder)
 
 
 def clear_refresh_queue():
@@ -300,55 +332,161 @@ def autorefresh_thread():
             pass
 
 
+def _account_refresh(account):
+    flasktools.send_sse(
+        event='account_refresh_started',
+        data=json.dumps(account.jsonify()),
+    )
+
+    def progress(payload):
+        flasktools.send_sse(
+            event='account_refresh_progress',
+            data=json.dumps(payload),
+        )
+
+    error = account.refresh(progress=progress)
+    flasktools.send_sse(
+        event='account_refresh_finished',
+        data=json.dumps({
+            'account_id': account.id,
+            'error': error,
+            'last_refresh': account.last_refresh,
+            'last_refresh_attempt': account.last_refresh_attempt,
+        }),
+    )
+    return error
+
+
+def _folder_refresh(account, folder_id):
+    folder = bringdb.get_folder(folder_id)
+    flasktools.send_sse(
+        event='folder_sync_started',
+        data=json.dumps({
+            'account_id': account.id,
+            'account_name': account.display_name,
+            'folder_id': folder.id,
+            'folder_name': folder.name,
+        }),
+    )
+
+    def progress(payload):
+        payload = dict(payload)
+        payload['account_name'] = account.display_name
+        payload['folder_id'] = folder.id
+        payload['folder_name'] = folder.name
+        flasktools.send_sse(
+            event='folder_sync_progress',
+            data=json.dumps(payload),
+        )
+
+    error = bringdb.sync_folder(account, folder, progress=progress)
+    flasktools.send_sse(
+        event='folder_sync_finished',
+        data=json.dumps({
+            'account_id': account.id,
+            'account_name': account.display_name,
+            'folder_id': folder.id,
+            'folder_name': folder.name,
+            'error': error,
+            'last_sync': folder.last_sync,
+        }),
+    )
+    return error
+
+
 def refresh_queue_thread():
     '''
-    One worker performs all account syncs so SQLite writes are serialized and
-    only one network-heavy refresh runs at a time.
+    One worker performs all syncs so SQLite writes are serialized and only one
+    network-heavy refresh runs at a time.
+
+    UI contract: refresh events update the account tree and unread counts only.
+    The frontend must never auto-reload the message list or the reader panel;
+    the user re-selects the account or folder to load new messages.
     '''
     log.info('Starting refresh queue thread.')
     while True:
-        account_id = REFRESH_QUEUE.get()
-        if account_id is QUIT_EVENT:
+        (_, _, job) = REFRESH_QUEUE.get()
+        if job is QUIT_EVENT:
             break
 
-        account = None
         try:
-            account = bringdb.get_account(account_id)
-            flasktools.send_sse(
-                event='account_refresh_started',
-                data=json.dumps(account.jsonify()),
-            )
-
-            def progress(payload):
-                flasktools.send_sse(
-                    event='account_refresh_progress',
-                    data=json.dumps(payload),
-                )
-
-            error = account.refresh(progress=progress)
-            flasktools.send_sse(
-                event='account_refresh_finished',
-                data=json.dumps({
-                    'account_id': account.id,
-                    'error': error,
-                    'last_refresh': account.last_refresh,
-                    'last_refresh_attempt': account.last_refresh_attempt,
-                }),
-            )
+            account = bringdb.get_account(job.account_id)
+            if job.folder_id is None:
+                _account_refresh(account)
+            else:
+                _folder_refresh(account, job.folder_id)
         except Exception:
-            log.warning('Refreshing account %s raised:\n%s', account_id, traceback.format_exc())
-            flasktools.send_sse(
-                event='account_refresh_finished',
-                data=json.dumps({
-                    'account_id': account_id,
-                    'error': traceback.format_exc(),
-                }),
-            )
+            error = traceback.format_exc()
+            log.warning('Refreshing %s raised:\n%s', job, error)
+            if job.folder_id is None:
+                flasktools.send_sse(
+                    event='account_refresh_finished',
+                    data=json.dumps({
+                        'account_id': job.account_id,
+                        'error': error,
+                    }),
+                )
+            else:
+                flasktools.send_sse(
+                    event='folder_sync_finished',
+                    data=json.dumps({
+                        'account_id': job.account_id,
+                        'folder_id': job.folder_id,
+                        'error': error,
+                    }),
+                )
         finally:
             with _REFRESH_QUEUE_LOCK:
-                _REFRESH_QUEUE_SET.discard(account_id)
+                _REFRESH_QUEUE_SET.discard((job.account_id, job.folder_id))
             if REFRESH_QUEUE.empty():
                 flasktools.send_sse(event='account_refresh_queue_finished', data='')
+            if supervisor is not None:
+                try:
+                    supervisor.reconfigure()
+                except Exception:
+                    log.warning('IDLE supervisor reconfigure raised.', exc_info=True)
+
+
+def _idle_change(snapshot, events, reason):
+    '''
+    An IDLE watcher saw a mailbox change or just reconnected. Queue a targeted
+    sync for that folder. The refresh worker serializes the actual network and
+    database work.
+    '''
+    log.debug(
+        'IMAP IDLE %s for account %s folder %s (%s events).',
+        reason,
+        snapshot.id,
+        snapshot.folder_id,
+        len(events),
+    )
+    try:
+        add_folder_to_refresh_queue(snapshot.folder_id)
+    except Exception:
+        log.debug('Could not queue the IDLE folder refresh.', exc_info=True)
+
+
+def _idle_state(snapshot, state, detail):
+    flasktools.send_sse(
+        event='idle_state',
+        data=json.dumps({
+            'account_id': snapshot.id,
+            'account_name': snapshot.display_name,
+            'folder_id': snapshot.folder_id,
+            'folder_name': snapshot.folder_name,
+            'state': state,
+            'detail': detail,
+        }),
+    )
+
+
+def reconfigure_idle_supervisor():
+    if supervisor is None:
+        return
+    try:
+        supervisor.reconfigure()
+    except Exception:
+        log.warning('IDLE supervisor reconfigure raised.', exc_info=True)
 
 
 def sse_keepalive_thread():
@@ -365,6 +503,31 @@ def init_bringdb(*args, **kwargs):
 
 
 def start_background_threads():
+    global supervisor
+
     threading.Thread(target=autorefresh_thread, daemon=True).start()
     threading.Thread(target=refresh_queue_thread, daemon=True).start()
     threading.Thread(target=sse_keepalive_thread, daemon=True).start()
+
+    if bringdb is not None:
+        supervisor = bringmail.idle_supervisor.IdleSupervisor(
+            bringdb,
+            on_change=_idle_change,
+            on_state=_idle_state,
+        )
+        try:
+            supervisor.start()
+        except Exception:
+            log.warning('Could not start the IMAP IDLE supervisor.', exc_info=True)
+
+
+def stop_background_threads():
+    global supervisor
+
+    if supervisor is not None:
+        supervisor.stop()
+        supervisor = None
+
+    AUTOREFRESH_THREAD_EVENTS.put(QUIT_EVENT)
+    clear_refresh_queue()
+    REFRESH_QUEUE.put((0, next(_REFRESH_SEQUENCE), QUIT_EVENT))

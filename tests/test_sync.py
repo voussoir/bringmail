@@ -11,6 +11,7 @@ if REPO_ROOT not in sys.path:
 
 from bringmail import bringmaildb
 from bringmail import constants
+from bringmail import exceptions
 
 FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'simple.eml')
 
@@ -106,6 +107,17 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(len(folders), 1)
         return folders[0]
 
+    def add_folder(self, name, display_name=None, special_use=None, attributes=None):
+        with self.db.transaction:
+            return self.db.add_folder(
+                account=self.account,
+                name=name,
+                display_name=display_name or name,
+                delimiter='/',
+                attributes=attributes,
+                special_use=special_use,
+            )
+
     def test_initial_sync_and_incremental(self):
         client = FakeIMAPClient({1: self.raw, 2: self.raw})
         error = self.sync(client)
@@ -185,6 +197,109 @@ class SyncTest(unittest.TestCase):
         folder = self.get_folder()
         self.assertEqual(folder.uidvalidity, 200)
         self.assertEqual(len(self.db.get_messages(folder=folder, limit=10)), 2)
+
+    def test_sync_folder_only_targets_requested_folder(self):
+        inbox = self.add_folder('INBOX', 'Inbox', constants.SPECIAL_USE_INBOX)
+        sent = self.add_folder('Sent', 'Sent', constants.SPECIAL_USE_SENT)
+
+        meta = {
+            'subject': 'sent-only',
+            'from': [],
+            'to': [],
+            'cc': [],
+            'date_unix': 1,
+            'message_id': '<sent@example.com>',
+            'has_attachments': False,
+            'snippet': '',
+        }
+        with self.db.transaction:
+            self.db.add_message(
+                account=self.account,
+                folder=sent,
+                uid=99,
+                uidvalidity=1,
+                raw=None,
+                meta=meta,
+                size=0,
+            )
+            self.db.execute(
+                'UPDATE accounts SET last_refresh_attempt = ? WHERE id == ?',
+                [1234, self.account.id],
+            )
+        self.account.last_refresh_attempt = 1234
+
+        client = FakeIMAPClient({1: self.raw})
+        with mock.patch('bringmail.helpers.connect_imap', return_value=client):
+            error = self.db.sync_folder(self.account, inbox)
+
+        self.assertIsNone(error)
+        self.assertTrue(client.logged_out)
+        self.assertEqual(client.selected, 'INBOX')
+        self.assertEqual(
+            {message.uid for message in self.db.get_messages(folder=inbox, limit=10)},
+            {1},
+        )
+        self.assertEqual(
+            {message.uid for message in self.db.get_messages(folder=sent, limit=10)},
+            {99},
+        )
+        self.assertEqual(self.account.last_refresh_attempt, 1234)
+
+        row = self.db.select_one(
+            'SELECT last_refresh, last_refresh_attempt FROM accounts WHERE id == ?',
+            [self.account.id],
+        )
+        self.assertEqual(row['last_refresh'], 0)
+        self.assertEqual(row['last_refresh_attempt'], 1234)
+
+    def test_sync_folder_records_error_on_folder_only(self):
+        inbox = self.add_folder('INBOX', 'Inbox', constants.SPECIAL_USE_INBOX)
+        client = FakeIMAPClient({1: self.raw})
+        client.search = mock.Mock(side_effect=RuntimeError('search exploded'))
+
+        with mock.patch('bringmail.helpers.connect_imap', return_value=client):
+            with mock.patch.object(bringmaildb.log, 'warning') as warning:
+                error = self.db.sync_folder(self.account, inbox)
+
+        self.assertTrue(warning.called)
+        self.assertIsNotNone(error)
+        self.assertIn('search exploded', error)
+        self.assertIn('search exploded', inbox.last_sync_error)
+
+        row = self.db.select_one(
+            'SELECT last_sync_error FROM folders WHERE id == ?',
+            [inbox.id],
+        )
+        self.assertIn('search exploded', row['last_sync_error'])
+        self.assertEqual(self.account.last_refresh_attempt, 0)
+        self.assertEqual(self.account.last_refresh_error, None)
+
+    def test_sync_folder_rejects_folder_from_another_account(self):
+        with self.db.transaction:
+            other = self.db.add_account(
+                host='imap.example.com',
+                port=993,
+                ssl=True,
+                starttls=False,
+                username='other@example.com',
+                password='hunter2',
+            )
+            other_folder = self.db.add_folder(
+                account=other,
+                name='INBOX',
+                display_name='Inbox',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_INBOX,
+            )
+
+        with self.assertRaises(exceptions.InvalidFolder):
+            self.db.sync_folder(self.account, other_folder)
+
+    def test_sync_folder_rejects_nonselectable_folder(self):
+        folder = self.add_folder('Parent', 'Parent', attributes=['\\Noselect'])
+
+        with self.assertRaises(exceptions.FolderNotSelectable):
+            self.db.sync_folder(self.account, folder)
 
 
 if __name__ == '__main__':
