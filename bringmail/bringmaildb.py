@@ -9,6 +9,7 @@ from . import constants
 from . import exceptions
 from . import helpers
 from . import objects
+from . import outbox
 
 from voussoirkit import cacheclass
 from voussoirkit import pathclass
@@ -435,7 +436,7 @@ class BDBMessageMixin:
         query = 'SELECT uid FROM messages WHERE folder_id == ?'
         return set(self.select_column(query, [folder.id]))
 
-    def update_message_body(self, message_id, *, raw, meta, size=None, flags=None, keywords=None, modseq=None):
+    def update_message_body(self, message_id, *, raw, meta, size=None, flags=None, keywords=None, modseq=None, update_flags=True):
         flags = flags or {}
         data = {
             'id': message_id,
@@ -445,14 +446,17 @@ class BDBMessageMixin:
             'meta': json.dumps(meta, ensure_ascii=False, separators=(',', ':')),
             'meta_version': constants.META_VERSION,
             'size': size,
-            'seen': bool(flags.get('seen', False)),
-            'flagged': bool(flags.get('flagged', False)),
-            'answered': bool(flags.get('answered', False)),
-            'imap_deleted': bool(flags.get('imap_deleted', False)),
-            'draft': bool(flags.get('draft', False)),
-            'keywords': json.dumps(keywords) if keywords else None,
             'modseq': modseq,
         }
+        if update_flags:
+            data.update({
+                'seen': bool(flags.get('seen', False)),
+                'flagged': bool(flags.get('flagged', False)),
+                'answered': bool(flags.get('answered', False)),
+                'imap_deleted': bool(flags.get('imap_deleted', False)),
+                'draft': bool(flags.get('draft', False)),
+                'keywords': json.dumps(keywords) if keywords else None,
+            })
         self.update(table=objects.Message, pairs=data, where_key='id')
 
     def get_pending_body_rows(self, folder, limit=100):
@@ -747,7 +751,12 @@ class BDBSyncMixin:
 
         server_uids = {int(uid) for uid in client.search(['ALL'])}
         local_uids = self.get_folder_uids(folder)
-        removed_uids = local_uids - server_uids
+        # A message with an unsent operation is never deleted by sync. The
+        # flush decides whether the operation was satisfied (its intended
+        # destination) or became a conflict because the server lost the
+        # message. Deleting the row here would discard the queued intent.
+        guarded_uids = self.get_pending_uids_for_folder(folder)
+        removed_uids = (local_uids - server_uids) - guarded_uids
         new_uids = sorted(server_uids - local_uids)
 
         if removed_uids:
@@ -807,6 +816,11 @@ class BDBSyncMixin:
         if not local:
             return
 
+        # Messages with an unsent flag operation keep their local value. The
+        # remote flags are still fetched; the flush compares them when it
+        # decides whether the queued operation is still valid.
+        guarded_ids = self.get_pending_flag_message_ids(folder)
+
         response = None
         if (
                 folder.highestmodseq is not None and
@@ -837,6 +851,8 @@ class BDBSyncMixin:
                 continue
             (flags, keywords, modseq) = _response_flag_info(data)
             current = local[uid]
+            if current['id'] in guarded_ids:
+                continue
             if (
                     bool(current['seen']) == flags['seen'] and
                     bool(current['flagged']) == flags['flagged'] and
@@ -988,6 +1004,7 @@ class BDBSyncMixin:
         if not pending:
             return
 
+        guarded_ids = self.get_pending_flag_message_ids(folder)
         total = len(pending)
         done = 0
         # Fetch newest first so the reader becomes useful as soon as possible.
@@ -1033,6 +1050,7 @@ class BDBSyncMixin:
                         flags=flags,
                         keywords=keywords,
                         modseq=modseq,
+                        update_flags=row['id'] not in guarded_ids,
                     )
             self.caches[objects.Message].clear()
             done += len(batch)
@@ -1047,11 +1065,980 @@ class BDBSyncMixin:
             )
 
 
+class BDBPendingMixin:
+    '''
+    Storage for the offline pending-operations queue.
+
+    Every queued row keeps the operation and the pre-state the user was
+    looking at. Storage is deliberately append-only apart from state
+    transitions, so the queue doubles as a record of what the user asked for
+    while disconnected.
+    '''
+
+    def __init__(self):
+        super().__init__()
+
+    def add_pending_operation(
+            self,
+            *,
+            account,
+            folder,
+            operation,
+            message=None,
+            enabled=None,
+            base_folder_id=None,
+            target_folder_id=None,
+            target_keywords=None,
+            observed=None,
+            base_modseq=None,
+            message_uid=None,
+            message_uidvalidity=None,
+        ):
+        if operation not in constants.OPERATION_KINDS:
+            raise ValueError(f'Unknown pending operation: {operation!r}')
+
+        if message is not None:
+            message_id = message.id
+            message_uid = message.uid
+            message_uidvalidity = message.uidvalidity
+        else:
+            message_id = None
+
+        if message_uid is None:
+            raise ValueError('message or message_uid is required')
+        if message_uidvalidity is None and folder is not None:
+            message_uidvalidity = folder.uidvalidity
+
+        now = int(helpers.now())
+        self.execute(
+            '''
+            INSERT INTO pending_operations (
+                account_id, folder_id, message_id, message_uid,
+                message_uidvalidity, operation, enabled, base_folder_id,
+                target_folder_id, target_keywords, base_modseq, observed,
+                state, attempts, next_attempt, last_error, created, updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            [
+                account.id,
+                folder.id,
+                message_id,
+                int(message_uid),
+                message_uidvalidity,
+                operation,
+                None if enabled is None else int(bool(enabled)),
+                base_folder_id,
+                target_folder_id,
+                (
+                    json.dumps(list(target_keywords))
+                    if target_keywords is not None
+                    else None
+                ),
+                base_modseq,
+                json.dumps(observed or {}, ensure_ascii=False, separators=(',', ':')),
+                constants.PENDING_STATE_PENDING,
+                0,
+                now,
+                None,
+                now,
+                now,
+            ],
+        )
+        row = self.sql_write.execute('SELECT last_insert_rowid()').fetchone()
+        return int(row[0])
+
+    def get_pending_operations(
+            self,
+            *,
+            account=None,
+            folder=None,
+            message_ids=None,
+            states=None,
+            operations=None,
+            due_before=None,
+            limit=None,
+        ):
+        wheres = []
+        bindings = []
+        if account is not None:
+            wheres.append('account_id == ?')
+            bindings.append(account.id)
+        if folder is not None:
+            wheres.append('folder_id == ?')
+            bindings.append(folder.id)
+        if message_ids is not None:
+            message_ids = [int(message_id) for message_id in message_ids]
+            if not message_ids:
+                return []
+            placeholders = _placeholders(len(message_ids))
+            wheres.append(f'message_id IN {placeholders}')
+            bindings.extend(message_ids)
+        if states is not None:
+            states = list(states)
+            if not states:
+                return []
+            placeholders = _placeholders(len(states))
+            wheres.append(f'state IN {placeholders}')
+            bindings.extend(states)
+        if operations is not None:
+            operations = list(operations)
+            if not operations:
+                return []
+            placeholders = _placeholders(len(operations))
+            wheres.append(f'operation IN {placeholders}')
+            bindings.extend(operations)
+        if due_before is not None:
+            wheres.append('next_attempt <= ?')
+            bindings.append(int(due_before))
+
+        query = 'SELECT * FROM pending_operations'
+        if wheres:
+            query += ' WHERE ' + ' AND '.join(wheres)
+        query += ' ORDER BY id ASC'
+        if limit is not None:
+            query += ' LIMIT ?'
+            bindings.append(int(limit))
+
+        rows = self.select(query, bindings) if bindings else self.select(query)
+        return [outbox.Operation.from_row(row) for row in rows]
+
+    def get_pending_for_message(self, message_id, *, states=None):
+        return self.get_pending_operations(message_ids=[message_id], states=states)
+
+    def get_pending_operation(self, operation_id):
+        row = self.select_one(
+            'SELECT * FROM pending_operations WHERE id == ?',
+            [int(operation_id)],
+        )
+        if row is None:
+            return None
+        return outbox.Operation.from_row(row)
+
+    def get_latest_delete_operation(self, message_id):
+        row = self.select_one(
+            '''
+            SELECT * FROM pending_operations
+            WHERE message_id == ? AND operation == ? AND state IN (?, ?)
+            ORDER BY id DESC LIMIT 1
+            ''',
+            [
+                int(message_id),
+                constants.OPERATION_DELETE,
+                constants.PENDING_STATE_PENDING,
+                constants.PENDING_STATE_SENT,
+            ],
+        )
+        if row is None:
+            return None
+        return outbox.Operation.from_row(row)
+
+    def get_pending_count(self, account):
+        return self.select_one_value(
+            'SELECT COUNT(id) FROM pending_operations WHERE account_id == ? AND state == ?',
+            [account.id, constants.PENDING_STATE_PENDING],
+            fallback=0,
+        )
+
+    def get_pending_summary(self, account):
+        rows = self.get_pending_operations(
+            account=account,
+            states=(
+                constants.PENDING_STATE_PENDING,
+                constants.PENDING_STATE_CONFLICTED,
+                constants.PENDING_STATE_FAILED,
+            ),
+        )
+        counts = outbox.summarize(rows)
+        return {
+            'pending': counts.get(constants.PENDING_STATE_PENDING, 0),
+            'conflicted': counts.get(constants.PENDING_STATE_CONFLICTED, 0),
+            'failed': counts.get(constants.PENDING_STATE_FAILED, 0),
+        }
+
+    def get_pending_counts_by_account(self):
+        '''
+        Return {account_id: {state: count}} for rows the UI should mention.
+
+        Superseded and sent rows are history rather than outstanding work and
+        are excluded.
+        '''
+        rows = self.select(
+            '''
+            SELECT account_id, state, COUNT(id) AS count
+            FROM pending_operations
+            WHERE state IN (?, ?, ?)
+            GROUP BY account_id, state
+            ''',
+            [
+                constants.PENDING_STATE_PENDING,
+                constants.PENDING_STATE_CONFLICTED,
+                constants.PENDING_STATE_FAILED,
+            ],
+        )
+        counts = {}
+        for row in rows:
+            counts.setdefault(row['account_id'], {})[row['state']] = row['count']
+        return counts
+
+    def get_pending_message_states(self, account, *, states=None):
+        if states is None:
+            states = (
+                constants.PENDING_STATE_PENDING,
+                constants.PENDING_STATE_CONFLICTED,
+                constants.PENDING_STATE_FAILED,
+            )
+        rows = self.get_pending_operations(account=account, states=states)
+        return outbox.pending_message_states(rows)
+
+    def get_pending_message_ids(self, *, folder=None, operations=None, states=None):
+        wheres = ['message_id IS NOT NULL']
+        bindings = []
+        if folder is not None:
+            wheres.append('folder_id == ?')
+            bindings.append(folder.id)
+        if operations is not None:
+            operations = list(operations)
+            if not operations:
+                return set()
+            placeholders = _placeholders(len(operations))
+            wheres.append(f'operation IN {placeholders}')
+            bindings.extend(operations)
+        if states is not None:
+            states = list(states)
+            if not states:
+                return set()
+            placeholders = _placeholders(len(states))
+            wheres.append(f'state IN {placeholders}')
+            bindings.extend(states)
+
+        query = 'SELECT DISTINCT message_id FROM pending_operations WHERE ' + ' AND '.join(wheres)
+        rows = self.select(query, bindings) if bindings else self.select(query)
+        return {int(row['message_id']) for row in rows}
+
+    def get_pending_flag_message_ids(self, folder):
+        return self.get_pending_message_ids(
+            folder=folder,
+            operations=constants.OPERATION_FLAG_KINDS,
+            states=(constants.PENDING_STATE_PENDING,),
+        )
+
+    def get_pending_uids_for_folder(self, folder):
+        rows = self.select(
+            '''
+            SELECT DISTINCT message_uid FROM pending_operations
+            WHERE folder_id == ? AND state == ?
+            ''',
+            [folder.id, constants.PENDING_STATE_PENDING],
+        )
+        return {int(row['message_uid']) for row in rows}
+
+    def has_due_pending(self, account, now=None):
+        if now is None:
+            now = int(helpers.now())
+        count = self.select_one_value(
+            '''
+            SELECT COUNT(id) FROM pending_operations
+            WHERE account_id == ? AND state == ? AND next_attempt <= ?
+            ''',
+            [account.id, constants.PENDING_STATE_PENDING, int(now)],
+            fallback=0,
+        )
+        return count > 0
+
+    def get_next_pending_attempt(self, account):
+        '''
+        The earliest time an account's pending queue wants to be retried, or
+        None when there is nothing pending. The autorefresh thread uses this
+        so backoff delays are honoured instead of waiting for the next
+        scheduled account refresh.
+        '''
+        value = self.select_one_value(
+            '''
+            SELECT MIN(next_attempt) AS next_attempt FROM pending_operations
+            WHERE account_id == ? AND state == ?
+            ''',
+            [account.id, constants.PENDING_STATE_PENDING],
+            fallback=None,
+        )
+        if value is None:
+            return None
+        return int(value)
+
+    def set_pending_state(
+            self,
+            operation_id,
+            state,
+            *,
+            last_error=None,
+            attempts=None,
+            next_attempt=None,
+        ):
+        pairs = {
+            'state': state,
+            'updated': int(helpers.now()),
+        }
+        if last_error is not None:
+            pairs['last_error'] = str(last_error)
+        if attempts is not None:
+            pairs['attempts'] = int(attempts)
+        if next_attempt is not None:
+            pairs['next_attempt'] = int(next_attempt)
+        columns = ', '.join(f'{column} = ?' for column in pairs)
+        bindings = list(pairs.values()) + [int(operation_id)]
+        self.execute(
+            f'UPDATE pending_operations SET {columns} WHERE id == ?',
+            bindings,
+        )
+
+
+class BDBOutboxMixin:
+    '''
+    Flush the pending queue against the mail server.
+
+    The flush always reconciles the affected folders first, then revalidates
+    each row against the fresh server state. Conditional STORE is used where
+    the server supports CONDSTORE; otherwise shared operations fall back to a
+    read-compare-write with a small unavoidable race.
+    '''
+
+    def __init__(self):
+        super().__init__()
+
+    def _outbox_progress(self, callback, **payload):
+        if callback is None:
+            return
+        try:
+            callback(payload)
+        except Exception:
+            log.debug('Outbox progress callback raised.', exc_info=True)
+
+    def _outbox_get_message(self, operation):
+        if operation.message_id is None:
+            return None
+        try:
+            return self.get_message(operation.message_id)
+        except exceptions.NoSuchMessage:
+            return None
+
+    def _outbox_mark(self, operation_id, state, *, error=None, attempts=None, next_attempt=None):
+        with self.transaction:
+            self.set_pending_state(
+                operation_id,
+                state,
+                last_error=error,
+                attempts=attempts,
+                next_attempt=next_attempt,
+            )
+
+    def _outbox_backoff(self, operations, error):
+        now = int(helpers.now())
+        for operation in operations:
+            # A row may have been resolved by an earlier step (for example a
+            # conflict recorded while another folder's reconcile failed).
+            # Only genuinely pending rows are retried.
+            current = self.get_pending_operation(operation.id)
+            if current is None or current.state != constants.PENDING_STATE_PENDING:
+                continue
+            attempts = current.attempts + 1
+            self._outbox_mark(
+                operation.id,
+                constants.PENDING_STATE_PENDING,
+                error=error,
+                attempts=attempts,
+                next_attempt=now + outbox.backoff_seconds(attempts),
+            )
+
+    def _outbox_has_newer_pending_flag(self, operation):
+        '''
+        True when the user queued another flag change for this message while
+        the current one was being sent. The newer local value must win over
+        whatever the server returned for the older operation.
+        '''
+        if not operation.is_flag or operation.message_id is None:
+            return False
+        rows = self.get_pending_operations(
+            message_ids=[operation.message_id],
+            states=(constants.PENDING_STATE_PENDING,),
+            operations=constants.OPERATION_FLAG_KINDS,
+        )
+        return any(row.id > operation.id for row in rows)
+
+    def _outbox_revert_local(self, operation):
+        '''
+        Put the local row back to the pre-state recorded with an operation
+        that will not be applied. This keeps the cache from claiming a
+        change that the server never accepted.
+        '''
+        message = self._outbox_get_message(operation)
+        if message is None:
+            return
+
+        if operation.is_flag:
+            if self._outbox_has_newer_pending_flag(operation):
+                return
+            if operation.operation == constants.OPERATION_KEYWORDS:
+                keywords = list(operation.observed.get('keywords', []))
+                pairs = {'keywords': json.dumps(keywords) if keywords else None}
+                message.keywords = keywords
+            else:
+                value = bool(operation.observed.get(operation.operation, False))
+                pairs = {operation.operation: value}
+                setattr(message, operation.operation, value)
+            with self.transaction:
+                pairs = dict(pairs)
+                pairs['id'] = message.id
+                self.update(table=objects.Message, pairs=pairs, where_key='id')
+            self.caches[objects.Message].clear()
+            return
+
+        if operation.operation in (
+                constants.OPERATION_DELETE,
+                constants.OPERATION_MOVE,
+                constants.OPERATION_RESTORE):
+            # A folder operation never changes the local row at enqueue time,
+            # except for the delete marker.
+            if operation.operation == constants.OPERATION_DELETE:
+                with self.transaction:
+                    self.update(
+                        table=objects.Message,
+                        pairs={'id': message.id, 'local_deleted': False},
+                        where_key='id',
+                    )
+                message.local_deleted = False
+                self.caches[objects.Message].clear()
+
+    def discard_pending(self, account, *, states=None):
+        '''
+        Abandon visible queued operations for an account without sending them.
+
+        The local flag values and delete markers are restored to the state
+        recorded by the earliest discarded operation for each message. Rows are
+        marked superseded rather than deleted, so the queue keeps its history.
+        '''
+        if states is None:
+            states = (
+                constants.PENDING_STATE_PENDING,
+                constants.PENDING_STATE_CONFLICTED,
+                constants.PENDING_STATE_FAILED,
+            )
+        rows = self.get_pending_operations(account=account, states=states)
+        if not rows:
+            return {'discarded': 0}
+
+        groups = {}
+        for row in rows:
+            if row.message_id is None:
+                continue
+            groups.setdefault(row.message_id, []).append(row)
+
+        with self.transaction:
+            for (message_id, group) in groups.items():
+                message = self._outbox_get_message(group[0])
+                if message is None:
+                    continue
+
+                pairs = {}
+                for operation in (
+                        constants.OPERATION_SEEN,
+                        constants.OPERATION_FLAGGED,
+                        constants.OPERATION_ANSWERED):
+                    kind_rows = [
+                        row for row in group
+                        if row.operation == operation
+                    ]
+                    if not kind_rows:
+                        continue
+                    value = bool(kind_rows[0].observed.get(
+                        operation,
+                        getattr(message, operation),
+                    ))
+                    pairs[operation] = value
+
+                keyword_rows = [
+                    row for row in group
+                    if row.operation == constants.OPERATION_KEYWORDS
+                ]
+                if keyword_rows:
+                    keywords = list(keyword_rows[0].observed.get('keywords') or [])
+                    pairs['keywords'] = json.dumps(keywords) if keywords else None
+
+                if any(row.operation == constants.OPERATION_DELETE for row in group):
+                    pairs['local_deleted'] = False
+
+                if not pairs:
+                    continue
+                pairs['id'] = message_id
+                self.update(table=objects.Message, pairs=pairs, where_key='id')
+
+            for row in rows:
+                self.set_pending_state(
+                    row.id,
+                    constants.PENDING_STATE_SUPERSEDED,
+                    last_error='Discarded by user.',
+                )
+
+        self.caches[objects.Message].clear()
+        return {'discarded': len(rows)}
+
+    def _outbox_summary(self, account):
+        return self.get_pending_summary(account)
+
+    def flush_pending(self, account, progress=None):
+        '''
+        Drain this account's queue. Returns a summary dict.
+
+        Connection failures leave rows pending with exponential backoff;
+        conflicts and refused actions move to terminal states and become
+        visible to the user. Nothing is ever silently discarded.
+        '''
+        account.assert_not_deleted()
+        now = int(helpers.now())
+        summary = {
+            'account_id': account.id,
+            'sent': 0,
+            'failed': 0,
+            'conflicted': 0,
+            'superseded': 0,
+            'pending': 0,
+            'not_due': 0,
+            'error': None,
+        }
+
+        rows = self.get_pending_operations(
+            account=account,
+            states=(constants.PENDING_STATE_PENDING,),
+        )
+        if not rows:
+            return summary
+
+        due = []
+        for row in rows:
+            if row.next_attempt > now:
+                summary['not_due'] += 1
+                continue
+            if outbox.is_expired(row, now):
+                # The action will never be sent. Put the local row back to
+                # the state the user saw so the cache does not claim a change
+                # the server never received.
+                self._outbox_revert_local(row)
+                self._outbox_mark(
+                    row.id,
+                    constants.PENDING_STATE_FAILED,
+                    error='Gave up retrying this action.',
+                )
+                summary['failed'] += 1
+                continue
+            due.append(row)
+
+        if not due:
+            summary['pending'] = self.get_pending_count(account)
+            return summary
+
+        self._outbox_progress(
+            progress,
+            stage='outbox_start',
+            account_id=account.id,
+            total=len(due),
+        )
+
+        client = None
+        try:
+            client = helpers.connect_imap(account)
+            helpers.enable_condstore(client)
+        except Exception as exc:
+            log.warning('Outbox could not connect to %s: %s', account, exc)
+            self._outbox_backoff(due, str(exc))
+            summary['error'] = f'Could not connect to the mail server: {exc}'
+            summary.update(self._outbox_summary(account))
+            self._outbox_progress(
+                progress,
+                stage='outbox_finished',
+                **summary,
+            )
+            return summary
+
+        try:
+            try:
+                self._outbox_reconcile(client, account, due, progress=progress)
+            except Exception as exc:
+                log.warning('Outbox reconcile for %s failed: %s', account, exc)
+                self._outbox_backoff(due, str(exc))
+                summary['error'] = f'Could not synchronize before sending: {exc}'
+                summary.update(self._outbox_summary(account))
+                self._outbox_progress(
+                    progress,
+                    stage='outbox_finished',
+                    **summary,
+                )
+                return summary
+
+            self.caches[objects.Message].clear()
+            fresh = self.get_pending_operations(
+                account=account,
+                states=(constants.PENDING_STATE_PENDING,),
+            )
+            fresh_due = [row for row in fresh if row.next_attempt <= now]
+            plan = outbox.consolidate(fresh_due)
+
+            if plan.superseded:
+                with self.transaction:
+                    for operation_id in plan.superseded:
+                        self.set_pending_state(
+                            operation_id,
+                            constants.PENDING_STATE_SUPERSEDED,
+                        )
+                summary['superseded'] = len(plan.superseded)
+
+            for (index, operation) in enumerate(plan.execute):
+                try:
+                    self._outbox_execute(client, operation)
+                except exceptions.PendingConflict as exc:
+                    log.info('Pending operation %s became a conflict: %s', operation, exc)
+                    self._outbox_revert_local(operation)
+                    self._outbox_mark(
+                        operation.id,
+                        constants.PENDING_STATE_CONFLICTED,
+                        error=exc.error_message,
+                    )
+                    summary['conflicted'] += 1
+                except exceptions.BringException as exc:
+                    log.warning('Pending operation %s failed: %s', operation, exc)
+                    self._outbox_revert_local(operation)
+                    self._outbox_mark(
+                        operation.id,
+                        constants.PENDING_STATE_FAILED,
+                        error=str(exc),
+                    )
+                    summary['failed'] += 1
+                except Exception as exc:
+                    # Anything unexpected is treated as a transport problem:
+                    # keep the row and retry rather than dropping the user's
+                    # action. The remaining plan is left for the next flush.
+                    log.warning(
+                        'Pending operation %s raised; backing off: %s',
+                        operation,
+                        exc,
+                    )
+                    self._outbox_backoff([operation], str(exc))
+                    summary['error'] = str(exc)
+                    break
+                else:
+                    summary['sent'] += 1
+
+                self._outbox_progress(
+                    progress,
+                    stage='outbox_progress',
+                    account_id=account.id,
+                    done=index + 1,
+                    total=len(plan.execute),
+                )
+        finally:
+            try:
+                client.logout()
+            except Exception:
+                pass
+
+        summary.update(self._outbox_summary(account))
+        self._outbox_progress(
+            progress,
+            stage='outbox_finished',
+            **summary,
+        )
+        return summary
+
+    def _outbox_reconcile(self, client, account, rows, progress=None):
+        '''
+        Sync every folder the queued operations will write to or read from,
+        before any write is attempted. This is what turns "another client
+        changed things while we were offline" into a decision instead of a
+        surprise.
+        '''
+        folder_ids = set()
+        for row in rows:
+            # Only the folder the operation was created in needs a sync. The
+            # destination folder is opened by the move itself, which also
+            # returns its current UIDVALIDITY.
+            folder_ids.add(row.folder_id)
+
+        for folder_id in sorted(folder_ids):
+            try:
+                folder = self.get_folder(folder_id)
+            except exceptions.NoSuchFolder:
+                self._outbox_fail_folder(rows, folder_id, 'The folder no longer exists.')
+                continue
+            if not folder.is_selectable:
+                self._outbox_fail_folder(rows, folder_id, 'The folder is not selectable.')
+                continue
+            self._sync_folder(client, folder, account, progress=progress)
+
+    def _outbox_fail_folder(self, rows, folder_id, error):
+        for row in rows:
+            if row.folder_id != folder_id and row.target_folder_id != folder_id:
+                continue
+            if row.folder_id != folder_id:
+                # The folder is only the destination; the operation itself
+                # still has a valid source. Leave it for revalidation.
+                continue
+            self._outbox_revert_local(row)
+            self._outbox_mark(
+                row.id,
+                constants.PENDING_STATE_CONFLICTED,
+                error=error,
+            )
+
+    def _outbox_execute(self, client, operation):
+        folder = self.get_folder(operation.folder_id)
+        message = self._outbox_get_message(operation)
+        # A queued flag operation can be re-targeted by an earlier move in
+        # the same plan, in which case operation.folder_id is no longer the
+        # message's live folder and its UIDVALIDITY is not comparable.
+        if message is not None and message.folder_id == folder.id:
+            if (
+                    operation.message_uidvalidity is not None and
+                    folder.uidvalidity is not None and
+                    int(operation.message_uidvalidity) != int(folder.uidvalidity)):
+                raise exceptions.PendingConflict(
+                    'The folder was renumbered after this action was queued.'
+                )
+
+        if operation.is_flag:
+            self._outbox_execute_flag(client, operation)
+        else:
+            self._outbox_execute_folder(client, operation)
+
+    def _outbox_flag_changes(self, operation, message):
+        '''
+        Compute the flag delta relative to the state the user saw, not the
+        local row. The local row may already show the desired value while the
+        server still holds the pre-state (for example when another client
+        changed the message and the sync guard preserved the local value).
+        '''
+        if operation.operation == constants.OPERATION_KEYWORDS:
+            target = set(operation.target_keywords)
+            current = set(operation.observed.get('keywords', message.keywords or []))
+            return (sorted(target - current), sorted(current - target))
+
+        flag = {
+            constants.OPERATION_SEEN: b'\\Seen',
+            constants.OPERATION_FLAGGED: b'\\Flagged',
+            constants.OPERATION_ANSWERED: b'\\Answered',
+        }[operation.operation]
+        current = bool(operation.observed.get(
+            operation.operation,
+            getattr(message, operation.operation),
+        ))
+        if operation.enabled and not current:
+            return ([flag], [])
+        if not operation.enabled and current:
+            return ([], [flag])
+        return ([], [])
+
+    def _outbox_plain_store(self, client, message, add, remove):
+        if add:
+            client.add_flags([message.uid], add)
+        if remove:
+            client.remove_flags([message.uid], remove)
+
+    def _outbox_refresh_message_flags(self, client, message, operation):
+        # MODSEQ is only meaningful when the server supports CONDSTORE and we
+        # actually have a mod-sequence to compare with. Some servers treat an
+        # unsupported MODSEQ item as a malformed body section, so do not ask
+        # for it on plain IMAP servers.
+        data_items = ['FLAGS']
+        if operation.base_modseq is not None and client.has_capability('CONDSTORE'):
+            data_items.append('MODSEQ')
+
+        try:
+            response = client.fetch([int(message.uid)], data_items)
+        except Exception:
+            if 'MODSEQ' not in data_items:
+                raise
+            # A server that advertises CONDSTORE but rejects MODSEQ without an
+            # explicit enablement still gives us the flags.
+            log.debug('MODSEQ fetch failed; retrying with FLAGS only.', exc_info=True)
+            data_items = ['FLAGS']
+            response = client.fetch([int(message.uid)], data_items)
+
+        data = response.get(int(message.uid)) or {}
+        if not data:
+            return
+        (flags, keywords, modseq) = _response_flag_info(data)
+        pairs = {'id': message.id}
+        if modseq is not None:
+            pairs['modseq'] = modseq
+        if not self._outbox_has_newer_pending_flag(operation):
+            pairs.update({
+                'seen': flags['seen'],
+                'flagged': flags['flagged'],
+                'answered': flags['answered'],
+                'imap_deleted': flags['imap_deleted'],
+                'draft': flags['draft'],
+                'keywords': json.dumps(keywords) if keywords else None,
+            })
+        if len(pairs) > 1:
+            with self.transaction:
+                self.update(table=objects.Message, pairs=pairs, where_key='id')
+        if modseq is not None:
+            message.modseq = modseq
+        if 'seen' in pairs:
+            message.seen = flags['seen']
+            message.flagged = flags['flagged']
+            message.answered = flags['answered']
+            message.imap_deleted = flags['imap_deleted']
+            message.draft = flags['draft']
+            message.keywords = keywords
+        self.caches[objects.Message].clear()
+
+    def _outbox_execute_flag(self, client, operation):
+        message = self._outbox_get_message(operation)
+        if message is None:
+            raise exceptions.PendingConflict('The message no longer exists locally.')
+
+        folder = self.get_folder(message.folder_id)
+        if not folder.is_selectable:
+            raise exceptions.PendingConflict('The folder is not selectable.')
+
+        client.select_folder(folder.name, readonly=False)
+        (add, remove) = self._outbox_flag_changes(operation, message)
+        if not add and not remove:
+            self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+            return
+
+        conditional = (
+            operation.base_modseq is not None and
+            folder.highestmodseq is not None and
+            client.has_capability('CONDSTORE')
+        )
+        if conditional:
+            (accepted, modified) = helpers.conditional_store(
+                client,
+                folder.name,
+                [message.uid],
+                add=add,
+                remove=remove,
+                since=operation.base_modseq,
+            )
+            if modified:
+                if operation.is_private_flag:
+                    # Local intent wins for private flags: apply the user's
+                    # click against the newer server state.
+                    self._outbox_plain_store(client, message, add, remove)
+                else:
+                    raise exceptions.PendingConflict(
+                        'The message changed on the server after this action was queued.'
+                    )
+        else:
+            if operation.operation == constants.OPERATION_KEYWORDS:
+                response = client.fetch([int(message.uid)], ['FLAGS'])
+                data = response.get(int(message.uid)) or {}
+                (_server_flags, server_keywords, _server_modseq) = _response_flag_info(data)
+                if set(server_keywords) != operation.base_flag_value():
+                    raise exceptions.PendingConflict(
+                        'The message keywords changed on the server after this action was queued.'
+                    )
+            self._outbox_plain_store(client, message, add, remove)
+
+        self._outbox_refresh_message_flags(client, message, operation)
+        self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+
+    def _outbox_execute_folder(self, client, operation):
+        message = self._outbox_get_message(operation)
+        if message is None:
+            if operation.operation == constants.OPERATION_DELETE:
+                # The message is already gone; the delete is satisfied.
+                self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+                return
+            raise exceptions.PendingConflict('The message no longer exists locally.')
+
+        try:
+            source = self.get_folder(message.folder_id)
+            target = self.get_folder(operation.target_folder_id)
+        except exceptions.NoSuchFolder:
+            raise exceptions.PendingConflict('The destination folder no longer exists.')
+
+        if not target.is_selectable:
+            raise exceptions.PendingConflict('The destination folder is not selectable.')
+
+        if source.id == target.id:
+            with self.transaction:
+                self.update(
+                    table=objects.Message,
+                    pairs={'id': message.id, 'local_deleted': False},
+                    where_key='id',
+                )
+            message.local_deleted = False
+            self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+            return
+
+        selected = client.select_folder(source.name, readonly=False)
+        server_uidvalidity = selected.get(b'UIDVALIDITY') if isinstance(selected, dict) else None
+        if (
+                message.uidvalidity is not None and
+                server_uidvalidity is not None and
+                int(message.uidvalidity) != int(server_uidvalidity)):
+            raise exceptions.PendingConflict(
+                'The source folder was renumbered after this action was queued.'
+            )
+
+        found = client.search(['UID', str(message.uid)])
+        if not found:
+            if operation.operation == constants.OPERATION_DELETE:
+                with self.transaction:
+                    self.delete(table=objects.Message, pairs={'id': message.id})
+                self.caches[objects.Message].clear()
+                self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+                return
+            with self.transaction:
+                self.delete(table=objects.Message, pairs={'id': message.id})
+            self.caches[objects.Message].clear()
+            raise exceptions.PendingConflict(
+                'The message no longer exists in the source folder.'
+            )
+
+        (new_uid, new_uidvalidity, uid_source) = objects.move_message_on_server(
+            client,
+            source_name=source.name,
+            destination_name=target.name,
+            uid=message.uid,
+            message_id=message.message_id,
+        )
+
+        with self.transaction:
+            if new_uid is not None:
+                self.update(
+                    table=objects.Message,
+                    pairs={
+                        'id': message.id,
+                        'folder_id': target.id,
+                        'uid': new_uid,
+                        'uidvalidity': new_uidvalidity,
+                        'local_deleted': False,
+                    },
+                    where_key='id',
+                )
+                message.folder_id = target.id
+                message.uid = new_uid
+                message.uidvalidity = new_uidvalidity
+                message.local_deleted = False
+                message._folder = target
+            else:
+                log.warning(
+                    'Could not determine the destination UID for message %s; '
+                    'removing the local row. The next sync will re-download it.',
+                    message.id,
+                )
+                self.delete(table=objects.Message, pairs={'id': message.id})
+        self.caches[objects.Message].clear()
+        self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+
+
 class BringMailDB(
         BDBAccountMixin,
         BDBFolderMixin,
         BDBMessageMixin,
         BDBSyncMixin,
+        BDBPendingMixin,
+        BDBOutboxMixin,
         worms.DatabaseWithCaching,
     ):
     def __init__(

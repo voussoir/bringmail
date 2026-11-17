@@ -301,6 +301,44 @@ class SyncTest(unittest.TestCase):
         with self.assertRaises(exceptions.FolderNotSelectable):
             self.db.sync_folder(self.account, folder)
 
+    def test_sync_flags_do_not_overwrite_pending_flag(self):
+        client = FakeIMAPClient({1: self.raw})
+        self.assertIsNone(self.sync(client))
+
+        folder = self.get_folder()
+        message = self.db.get_messages(folder=folder, limit=10)[0]
+        self.assertTrue(message.queue_seen(True))
+        self.assertTrue(message.seen)
+
+        # The server still reports the message as unseen. The pending change
+        # must survive the refresh so the flush can decide its fate.
+        client.flags[1] = set()
+        self.assertIsNone(self.sync(client))
+
+        row = self.db.select_one(
+            'SELECT seen FROM messages WHERE id == ?',
+            [message.id],
+        )
+        self.assertEqual(row['seen'], 1)
+
+    def test_sync_keeps_message_with_pending_delete(self):
+        client = FakeIMAPClient({1: self.raw})
+        self.assertIsNone(self.sync(client))
+
+        folder = self.get_folder()
+        message = self.db.get_messages(folder=folder, limit=10)[0]
+        self.add_folder('Trash', 'Trash', constants.SPECIAL_USE_TRASH)
+        self.assertTrue(message.queue_delete())
+        self.assertTrue(message.local_deleted)
+
+        # The server no longer reports the UID. Sync must not hard-delete the
+        # row while a queued operation still refers to it.
+        client.raws = {}
+        with mock.patch('bringmail.helpers.connect_imap', return_value=client):
+            self.assertIsNone(self.db.sync_folder(self.account, folder))
+
+        self.assertEqual(self.db.get_folder_uids(folder), {1})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -42,7 +42,7 @@ def _invalid(message):
 def get_accounts_json():
     accounts = []
     for account in common.bringdb.get_accounts():
-        accounts.append(account.jsonify(folders=True, unread_count=True))
+        accounts.append(account.jsonify(folders=True, unread_count=True, pending_count=True))
     return flasktools.json_response(accounts)
 
 
@@ -56,7 +56,7 @@ def post_accounts_refresh_all():
 @site.route('/account/<account_id>.json')
 def get_account_json(account_id):
     account = common.get_account(account_id, response_type='json')
-    return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
+    return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
 
 
 @site.route('/account/add')
@@ -114,7 +114,7 @@ def post_accounts_add():
 
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
     common.reconfigure_idle_supervisor()
-    return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
+    return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
 
 
 @site.route('/account/<account_id>/update', methods=['POST'])
@@ -176,7 +176,7 @@ def post_account_update(account_id):
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
     common.reconfigure_idle_supervisor()
 
-    return flasktools.json_response(account.jsonify(folders=True, unread_count=True))
+    return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
 
 
 @site.route('/account/<account_id>/delete', methods=['POST'])

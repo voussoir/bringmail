@@ -39,6 +39,8 @@ let reader_headers_button = null;
 let context_menu = null;
 let context_title = null;
 let context_refresh_button = null;
+let context_retry_pending_button = null;
+let context_discard_pending_button = null;
 let context_settings_link = null;
 let context_target = null;
 
@@ -47,6 +49,7 @@ let message_context_title = null;
 let message_context_read_button = null;
 let message_context_unread_button = null;
 let message_context_delete_button = null;
+let message_context_restore_button = null;
 let message_context_move_list = null;
 let message_context_ids = [];
 
@@ -266,6 +269,23 @@ function render_accounts() {
         set_unread_span(unread, account.unread_count);
         header.appendChild(unread);
 
+        const pending = document.createElement("span");
+        pending.classList.add("pending_count");
+        const pending_total = (account.pending_count || 0) + (account.conflict_count || 0);
+        pending.classList.toggle("hidden", pending_total === 0);
+        if (pending_total > 0) {
+            if (account.conflict_count) {
+                pending.classList.add("pending_conflict");
+                pending.textContent = `!${account.conflict_count}`;
+                pending.title = `${account.conflict_count} action(s) could not be synced. Right-click the account for queue actions.`;
+            } else {
+                pending.classList.add("pending_waiting");
+                pending.textContent = `↑${account.pending_count}`;
+                pending.title = `${account.pending_count} action(s) waiting to sync. Right-click the account for queue actions.`;
+            }
+        }
+        header.appendChild(pending);
+
         header.addEventListener("click", function() {
             select_account(account.id);
         });
@@ -326,6 +346,38 @@ function render_accounts() {
     update_active_classes();
     update_unread_displays();
     build_move_options();
+}
+
+function retry_pending_actions(account_id) {
+    api.accounts.flush(account_id, function(response) {
+        if (!api_was_ok(response)) {
+            show_api_error(response);
+        }
+    });
+}
+
+function discard_pending_actions(account_id) {
+    const account = find_account(account_id);
+    if (!account) {
+        return;
+    }
+    const total = (account.pending_count || 0) + (account.conflict_count || 0);
+    if (total === 0) {
+        return;
+    }
+    const name = account.display_name || account.label || `Account ${account_id}`;
+    const message = (
+        `Discard ${total} pending action(s) for ${name}? ` +
+        `The local changes will be reverted and the actions will not be sent.`
+    );
+    if (!window.confirm(message)) {
+        return;
+    }
+    api.pending.discard_all(account_id, function(response) {
+        if (!api_was_ok(response)) {
+            show_api_error(response);
+        }
+    });
 }
 
 function update_collapse_toggle(account_div) {
@@ -657,8 +709,14 @@ function create_message_row(message) {
     if (!message.seen) {
         row.classList.add("unread");
     }
-    if (trashed_ids.has(String(message.id))) {
+    if (trashed_ids.has(String(message.id)) || message.local_deleted) {
         row.classList.add("trashed");
+    }
+    if (message.pending) {
+        row.classList.add("pending");
+        if (message.pending.state === "conflicted" || message.pending.state === "failed") {
+            row.classList.add("pending_conflict");
+        }
     }
     if (selected_ids.has(String(message.id))) {
         row.classList.add("message_selected");
@@ -687,6 +745,23 @@ function create_message_row(message) {
     attachment.classList.add("attachment");
     attachment.textContent = message.has_attachments ? "📎" : "";
     row.appendChild(attachment);
+
+    const pending = document.createElement("span");
+    pending.classList.add("pending_badge");
+    if (message.pending) {
+        const conflicted = (
+            message.pending.state === "conflicted" ||
+            message.pending.state === "failed"
+        );
+        pending.textContent = conflicted ? "!" : "↑";
+        pending.title = conflicted
+            ? `${message.pending.label || "Action"} could not be synced (${message.pending.state}).`
+            : `${message.pending.label || "Action"} waiting to sync.`;
+        if (conflicted) {
+            pending.classList.add("pending_conflict");
+        }
+    }
+    row.appendChild(pending);
 
     const date = document.createElement("span");
     date.classList.add("date");
@@ -1341,10 +1416,10 @@ function delete_messages(ids) {
     if (!ids || ids.length === 0) {
         return;
     }
-    // Show the messages as trashed immediately and assume the server request
-    // will succeed. The rows stay in place with a strikethrough instead of
-    // being removed; the next reload of this view drops them because they now
-    // belong to the trash folder.
+    // Show the messages as trashed immediately and queue the delete. The
+    // rows stay in place with a strikethrough; if the delete is still
+    // pending the user can undo it, and once it is flushed the next reload
+    // of this view drops the rows because they now belong to the trash.
     const previous_state = new Map();
     for (const message_id of ids) {
         const state = {
@@ -1380,6 +1455,31 @@ function delete_messages(ids) {
 
 function delete_selected() {
     delete_messages(selected_or_current_ids());
+}
+
+function restore_messages(ids) {
+    if (!ids || ids.length === 0) {
+        return;
+    }
+    api.messages.batch_restore(ids, function(response) {
+        if (!api_was_ok(response)) {
+            show_api_error(response);
+            return;
+        }
+        for (const message_id of ids) {
+            const message = find_message(message_id);
+            const folder_id = message ? message.folder_id : null;
+            untrash_local(message_id, folder_id);
+            if (message) {
+                message.local_deleted = false;
+            }
+        }
+        build_move_options();
+        load_accounts();
+        if (active_kind !== null) {
+            load_messages(true);
+        }
+    });
 }
 
 function refresh_account(account_id) {
@@ -1422,6 +1522,14 @@ function show_account_contextmenu(event, kind, id, account_id, title) {
         id: id,
         account_id: account_id,
     };
+    const account = find_account(account_id);
+    const pending_count = account ? (account.pending_count || 0) : 0;
+    const conflict_count = account ? (account.conflict_count || 0) : 0;
+    context_retry_pending_button.classList.toggle("hidden", pending_count === 0);
+    context_discard_pending_button.classList.toggle(
+        "hidden",
+        (pending_count + conflict_count) === 0
+    );
     context_title.textContent = title;
     context_settings_link.href = `/account/${account_id}/settings`;
     contextmenus.show_menu(event, context_menu);
@@ -1459,6 +1567,20 @@ function build_message_contextmenu(ids) {
     } else {
         message_context_title.textContent = `${ids.length} messages`;
     }
+
+    const can_restore = ids.some(function(message_id) {
+        const message = find_message(message_id);
+        const pending_delete = Boolean(
+            message &&
+            message.pending &&
+            message.pending.operation === "delete"
+        );
+        return Boolean(
+            trashed_ids.has(String(message_id)) ||
+            (message && (message.local_deleted || pending_delete))
+        );
+    });
+    message_context_restore_button.classList.toggle("hidden", !can_restore);
 
     common.delete_all_children(message_context_move_list);
     const destinations = message_context_destinations(ids);
@@ -1543,6 +1665,12 @@ function status_detail_for(state) {
     if (state.stage === "folder_finished") {
         return `Finished ${state.folder_name}`;
     }
+    if (state.stage === "outbox_start") {
+        return "Sending pending actions…";
+    }
+    if (state.stage === "outbox_progress") {
+        return `Sending pending actions (${state.done}/${state.total})`;
+    }
     if (state.stage === "error") {
         return "See account settings for details.";
     }
@@ -1576,7 +1704,8 @@ function render_status_bar() {
         status_spinner.hide();
         return;
     }
-    status_text_element.textContent = `Syncing ${refresh_status.name}`;
+    const verb = String(refresh_status.stage).startsWith("outbox") ? "Sending" : "Syncing";
+    status_text_element.textContent = `${verb} ${refresh_status.name}`;
     status_detail_element.textContent = status_detail_for(refresh_status);
     status_spinner.show();
 }
@@ -1757,6 +1886,78 @@ function start_sse() {
         load_accounts();
     });
 
+    sse.addEventListener("outbox_started", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        refresh_status = {
+            account_id: payload.account_id,
+            name: status_account_name(payload.account_id),
+            stage: "outbox_start",
+            folder_name: "",
+            done: 0,
+            total: 0,
+            index: 0,
+            error: null,
+        };
+        render_status_bar();
+    });
+
+    sse.addEventListener("outbox_progress", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        update_refresh_status(payload);
+    });
+
+    sse.addEventListener("outbox_finished", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        if (payload.error) {
+            console.warn(payload.error);
+        }
+        finish_refresh_status(payload);
+        load_accounts();
+        // Deliberately do not reload the message list or the reader here.
+        // Flushing is a background operation, like a scheduled refresh. The
+        // user's selection, scroll position, and open message must survive a
+        // queued read/move/delete being sent to the server.
+    });
+
+    sse.addEventListener("pending_discarded", function(event) {
+        let payload = null;
+        try {
+            payload = JSON.parse(event.data);
+        } catch (exc) {
+            return;
+        }
+        if (payload.error) {
+            console.warn(payload.error);
+        }
+        load_accounts(function() {
+            const affects_active_view = (
+                active_kind === "all" ||
+                (
+                    active_account_id !== null &&
+                    String(active_account_id) === String(payload.account_id)
+                )
+            );
+            if (affects_active_view) {
+                load_messages(true);
+            }
+        });
+    });
+
     sse.addEventListener("idle_state", function(event) {
         let payload = null;
         try {
@@ -1819,17 +2020,7 @@ function figure_initial_selection() {
         }
     }
 
-    const first_account = accounts_data[0];
-    if (!first_account) {
-        return;
-    }
-    const inbox = first_account.folders.find(folder => folder.special_use === "\\Inbox");
-    const first_folder = inbox || first_account.folders.find(folder => folder.selectable);
-    if (first_folder) {
-        select_folder(first_folder.id);
-    } else {
-        select_account(first_account.id);
-    }
+    select_all_accounts();
 }
 
 function on_pageload() {
@@ -1861,6 +2052,8 @@ function on_pageload() {
     context_menu = document.getElementById("mail_contextmenu");
     context_title = document.getElementById("context_title");
     context_refresh_button = document.getElementById("context_refresh_button");
+    context_retry_pending_button = document.getElementById("context_retry_pending_button");
+    context_discard_pending_button = document.getElementById("context_discard_pending_button");
     context_settings_link = document.getElementById("context_settings_link");
 
     message_context_menu = document.getElementById("message_contextmenu");
@@ -1868,6 +2061,7 @@ function on_pageload() {
     message_context_read_button = document.getElementById("message_context_read_button");
     message_context_unread_button = document.getElementById("message_context_unread_button");
     message_context_delete_button = document.getElementById("message_context_delete_button");
+    message_context_restore_button = document.getElementById("message_context_restore_button");
     message_context_move_list = document.getElementById("message_context_move_list");
 
     messages_element.addEventListener("click", on_messages_click);
@@ -1885,6 +2079,10 @@ function on_pageload() {
     message_context_delete_button.addEventListener("click", function() {
         contextmenus.hide_open_menus();
         delete_messages(message_context_ids);
+    });
+    message_context_restore_button.addEventListener("click", function() {
+        contextmenus.hide_open_menus();
+        restore_messages(message_context_ids);
     });
 
     document.getElementById("refresh_all_button").addEventListener("click", refresh_all);
@@ -1930,6 +2128,22 @@ function on_pageload() {
         } else {
             refresh_account(context_target.account_id);
         }
+    });
+
+    context_retry_pending_button.addEventListener("click", function() {
+        contextmenus.hide_open_menus();
+        if (!context_target) {
+            return;
+        }
+        retry_pending_actions(context_target.account_id);
+    });
+
+    context_discard_pending_button.addEventListener("click", function() {
+        contextmenus.hide_open_menus();
+        if (!context_target) {
+            return;
+        }
+        discard_pending_actions(context_target.account_id);
     });
 
     accounts_element.addEventListener("contextmenu", function(event) {

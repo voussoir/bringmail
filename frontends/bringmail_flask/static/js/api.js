@@ -3,6 +3,7 @@ const api = {};
 api.accounts = {};
 api.folders = {};
 api.messages = {};
+api.pending = {};
 
 api.accounts.get_accounts = function(callback) {
     return http.get({url: "/accounts.json", callback: callback});
@@ -54,6 +55,22 @@ api.accounts.refresh_all = function(callback) {
 
 api.accounts.test = function(account_id, callback) {
     return http.post({url: `/account/${account_id}/test`, callback: callback});
+};
+
+api.accounts.get_pending = function(account_id, callback) {
+    return http.get({url: `/account/${account_id}/pending.json`, callback: callback});
+};
+
+api.accounts.flush = function(account_id, callback) {
+    return http.post({url: `/account/${account_id}/flush`, callback: callback});
+};
+
+api.pending.dismiss = function(operation_id, callback) {
+    return http.post({url: `/pending/${operation_id}/dismiss`, callback: callback});
+};
+
+api.pending.discard_all = function(account_id, callback) {
+    return http.post({url: `/account/${account_id}/pending/discard`, callback: callback});
 };
 
 api.folders.get_messages = function(folder_id, parameters, callback) {
@@ -108,6 +125,10 @@ api.messages.delete = function(message_id, callback) {
     return http.post({url: `/message/${message_id}/delete`, callback: callback});
 };
 
+api.messages.restore = function(message_id, callback) {
+    return http.post({url: `/message/${message_id}/restore`, callback: callback});
+};
+
 api.messages.batch_set_seen = function(message_ids, seen, callback) {
     return http.post({
         url: "/batch/messages/set_seen",
@@ -127,6 +148,14 @@ api.messages.batch_move = function(message_ids, folder_id, callback) {
 api.messages.batch_delete = function(message_ids, callback) {
     return http.post({
         url: "/batch/messages/delete",
+        data: {"message_ids": message_ids.join(",")},
+        callback: callback,
+    });
+};
+
+api.messages.batch_restore = function(message_ids, callback) {
+    return http.post({
+        url: "/batch/messages/restore",
         data: {"message_ids": message_ids.join(",")},
         callback: callback,
     });

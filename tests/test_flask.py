@@ -90,8 +90,12 @@ class FlaskTest(unittest.TestCase):
                 b'message_context_read_button',
                 b'message_context_unread_button',
                 b'message_context_delete_button',
+                b'message_context_restore_button',
+                b'context_retry_pending_button',
+                b'context_discard_pending_button',
                 b'message_context_move_list'):
             self.assertIn(b'id="' + element_id + b'"', response.data)
+        self.assertNotIn(b'id="pending_panel"', response.data)
 
     def test_root_has_no_flag_controls(self):
         response = self.client.get('/')
@@ -374,6 +378,101 @@ class FlaskTest(unittest.TestCase):
         common.add_folder_to_refresh_queue(self.folder)
         common.add_folder_to_refresh_queue(self.folder)
         self.assertEqual(common.REFRESH_QUEUE.qsize(), 1)
+
+    def test_set_seen_queues_without_network(self):
+        response = self.client.post(
+            f'/message/{self.message.id}/set_seen',
+            data={'seen': 'true'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['pending']['operation'], constants.OPERATION_SEEN)
+        self.assertTrue(data['seen'])
+        self.assertEqual(self.db.get_pending_count(self.account), 1)
+
+        jobs = []
+        while not common.REFRESH_QUEUE.empty():
+            jobs.append(common.REFRESH_QUEUE.get_nowait())
+        self.assertTrue(any(isinstance(job, common.FlushJob) for (_, _, job) in jobs))
+
+    def test_delete_and_restore_endpoints(self):
+        with self.db.transaction:
+            self.db.add_folder(
+                account=self.account,
+                name='Trash',
+                display_name='Trash',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_TRASH,
+            )
+
+        response = self.client.post(
+            f'/message/{self.message.id}/delete',
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['local_deleted'])
+        self.assertEqual(data['pending']['operation'], constants.OPERATION_DELETE)
+        self.assertTrue(self.db.get_message(self.message.id).local_deleted)
+
+        response = self.client.post(
+            f'/message/{self.message.id}/restore',
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertFalse(data['local_deleted'])
+        self.assertFalse(self.db.get_message(self.message.id).local_deleted)
+
+    def test_pending_json_lists_and_dismisses(self):
+        self.message.queue_seen(True)
+        operation = self.db.get_pending_for_message(self.message.id)[0]
+        with self.db.transaction:
+            self.db.set_pending_state(
+                operation.id,
+                constants.PENDING_STATE_CONFLICTED,
+                last_error='changed on the server',
+            )
+
+        response = self.client.get(f'/account/{self.account.id}/pending.json')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['counts']['conflicted'], 1)
+        self.assertEqual(len(data['operations']), 1)
+        self.assertEqual(data['operations'][0]['state'], constants.PENDING_STATE_CONFLICTED)
+
+        response = self.client.post(
+            f'/pending/{operation.id}/dismiss',
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.db.get_pending_operation(operation.id).state,
+            constants.PENDING_STATE_SUPERSEDED,
+        )
+
+    def test_pending_discard_endpoint_queues_discard(self):
+        self.message.queue_seen(True)
+        common.clear_refresh_queue()
+        response = self.client.post(
+            f'/account/{self.account.id}/pending/discard',
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['type'], 'discard_queued')
+        jobs = []
+        while not common.REFRESH_QUEUE.empty():
+            jobs.append(common.REFRESH_QUEUE.get_nowait()[2])
+        self.assertTrue(any(isinstance(job, common.DiscardJob) for job in jobs))
+
+    def test_accounts_json_includes_pending_count(self):
+        self.message.queue_seen(True)
+        response = self.client.get('/accounts.json')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data[0]['pending_count'], 1)
 
 
 if __name__ == '__main__':

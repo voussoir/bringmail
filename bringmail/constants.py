@@ -9,7 +9,7 @@ separately compiled JSON1 extension. See bringmail.exceptions.SQLiteTooOld.
 
 # Increment this when DB_INIT changes, and add a matching upgrade function in
 # bringmail/upgrades.py so existing databases can be brought forward.
-DATABASE_VERSION = 1
+DATABASE_VERSION = 2
 
 MINIMUM_SQLITE = (3, 38, 0)
 MINIMUM_SQLITE_STRING = '.'.join(str(part) for part in MINIMUM_SQLITE)
@@ -56,6 +56,47 @@ LARGE_MESSAGE_BYTES = 10 * 1024 * 1024
 RAW_CODEC_ZLIB = 1
 
 META_VERSION = 1
+
+# Pending (offline) operations. A queued row records the operation the user
+# asked for plus the pre-state they were looking at, so a flush can tell
+# whether the server state still matches what the user acted on.
+OPERATION_SEEN = 'seen'
+OPERATION_FLAGGED = 'flagged'
+OPERATION_ANSWERED = 'answered'
+OPERATION_KEYWORDS = 'keywords'
+OPERATION_MOVE = 'move'
+OPERATION_DELETE = 'delete'
+OPERATION_RESTORE = 'restore'
+
+OPERATION_PRIVATE_FLAGS = (
+    OPERATION_SEEN,
+    OPERATION_FLAGGED,
+    OPERATION_ANSWERED,
+)
+OPERATION_FLAG_KINDS = OPERATION_PRIVATE_FLAGS + (OPERATION_KEYWORDS,)
+OPERATION_FOLDER_KINDS = (
+    OPERATION_MOVE,
+    OPERATION_DELETE,
+    OPERATION_RESTORE,
+)
+OPERATION_KINDS = OPERATION_FLAG_KINDS + OPERATION_FOLDER_KINDS
+
+PENDING_STATE_PENDING = 'pending'
+PENDING_STATE_SENT = 'sent'
+PENDING_STATE_FAILED = 'failed'
+PENDING_STATE_CONFLICTED = 'conflicted'
+PENDING_STATE_SUPERSEDED = 'superseded'
+
+# Connection failures leave the row pending and retry later. Permanent
+# refusals move the row to failed with no further attempts.
+OUTBOX_RETRY_BASE_SECONDS = 5
+OUTBOX_RETRY_MAX_SECONDS = 15 * 60
+OUTBOX_RETRY_EXPIRE_SECONDS = 24 * 60 * 60
+# A local-intent flag write that loses a conditional STORE race is retried
+# once against the newer mod-sequence before it is given up on.
+OUTBOX_MAX_CONDITIONAL_RETRIES = 1
+# How many pending rows to load per account in one flush.
+OUTBOX_BATCH_SIZE = 500
 
 SPECIAL_USE_INBOX = '\\Inbox'
 SPECIAL_USE_TRASH = '\\Trash'
@@ -138,6 +179,7 @@ CREATE TABLE IF NOT EXISTS messages(
     keywords TEXT,
     modseq INT,
     size INT,
+    local_deleted BOOLEAN NOT NULL DEFAULT 0,
     subject TEXT GENERATED ALWAYS AS (json_extract(meta, '$.subject')) VIRTUAL,
     from_name TEXT GENERATED ALWAYS AS (json_extract(meta, '$.from[0].name')) VIRTUAL,
     from_addr TEXT GENERATED ALWAYS AS (json_extract(meta, '$.from[0].addr')) VIRTUAL,
@@ -159,6 +201,36 @@ CREATE INDEX IF NOT EXISTS index_messages_folder_flagged
     ON messages(folder_id, flagged);
 CREATE INDEX IF NOT EXISTS index_messages_account_message_id
     ON messages(account_id, message_id);
+
+CREATE TABLE IF NOT EXISTS pending_operations(
+    id INTEGER PRIMARY KEY,
+    account_id INT NOT NULL,
+    folder_id INT NOT NULL,
+    message_id INT,
+    message_uid INT NOT NULL,
+    message_uidvalidity INT,
+    operation TEXT NOT NULL,
+    enabled INT,
+    base_folder_id INT,
+    target_folder_id INT,
+    target_keywords TEXT,
+    base_modseq INT,
+    observed TEXT,
+    state TEXT NOT NULL,
+    attempts INT NOT NULL,
+    next_attempt INT NOT NULL,
+    last_error TEXT,
+    created INT NOT NULL,
+    updated INT NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS index_pending_ops_account_state
+    ON pending_operations(account_id, state);
+CREATE INDEX IF NOT EXISTS index_pending_ops_message
+    ON pending_operations(message_id);
+CREATE INDEX IF NOT EXISTS index_pending_ops_folder_state
+    ON pending_operations(folder_id, state);
 '''
 
 

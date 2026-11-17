@@ -938,6 +938,99 @@ def copyuid_from_response(client, response, *, before=(), before_copyuid=()):
     return None
 
 
+# imaplib stores the contents of a [MODIFIED ...] response code in its own
+# untagged_responses map, and some servers put it in the tagged response text
+# instead. Both forms are accepted.
+MODIFIED_RE = re.compile(rb'\[MODIFIED\s+([0-9,:\s]+)\]', re.IGNORECASE)
+
+
+def _pop_untagged_values(client, name):
+    imap = getattr(client, '_imap', None)
+    untagged = getattr(imap, 'untagged_responses', None)
+    if not untagged:
+        return []
+    values = []
+    for key in (name, name.encode('ascii')):
+        try:
+            entries = untagged.pop(key, None) or []
+        except AttributeError:
+            entries = []
+        for value in entries:
+            value = _response_bytes(value)
+            if value is not None:
+                values.append(value)
+    return values
+
+
+def _parse_uid_text(text):
+    text = text.replace(b' ', b'')
+    return _parse_uid_set(text)
+
+
+def modified_from_response(client, data=()):
+    '''
+    Return the set of UIDs a conditional STORE refused because the message
+    changed since the supplied UNCHANGEDSINCE value.
+    '''
+    uids = set()
+    for value in _pop_untagged_values(client, 'MODIFIED'):
+        try:
+            uids.update(_parse_uid_text(value))
+        except ValueError:
+            log.debug('Could not parse MODIFIED response %r.', value)
+    for value in data or ():
+        value = _response_bytes(value)
+        if not value:
+            continue
+        match = MODIFIED_RE.search(value)
+        if match is None:
+            continue
+        try:
+            uids.update(_parse_uid_set(match.group(1).replace(b' ', b'')))
+        except ValueError:
+            log.debug('Could not parse MODIFIED response %r.', value)
+    return uids
+
+
+def conditional_store(client, folder_name, uids, *, add=(), remove=(), since):
+    '''
+    Perform a conditional STORE (UNCHANGEDSINCE) for one flag operation.
+
+    imapclient's add_flags / remove_flags cannot send the UNCHANGEDSINCE
+    modifier, so this drops to imaplib for one UID STORE. The folder must be
+    selected; it is selected here to keep the call self-contained.
+
+    Returns (accepted_uids, modified_uids). modified_uids are the messages
+    the server refused because their mod-sequence was newer than `since`.
+    '''
+    uids = [int(uid) for uid in uids]
+    if not uids:
+        return (set(), set())
+    if add and remove:
+        raise ValueError('add and remove are mutually exclusive')
+    if not add and not remove:
+        return (set(uids), set())
+
+    client.select_folder(folder_name, readonly=False)
+    uid_set = ','.join(str(uid) for uid in uids)
+    item = '+FLAGS' if add else '-FLAGS'
+    flags = ' '.join(decode_flag(flag) for flag in (add or remove))
+    flags = f'({flags})'
+
+    typ, data = client._imap.uid(
+        'STORE',
+        uid_set,
+        f'(UNCHANGEDSINCE {int(since)})',
+        item,
+        flags,
+    )
+    modified = modified_from_response(client, data or ())
+    if typ != 'OK' and not modified:
+        raise exceptions.MailServerActionError(str(data))
+    accepted = set(uids) - modified
+    return (accepted, modified)
+
+
 # Authenticated sessions are kept open across message actions so that clicking
 # through a mailbox does not perform a full IMAP login for every read / flag /
 # move. Sync itself uses its own short-lived connection.

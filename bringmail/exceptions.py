@@ -94,6 +94,18 @@ class MessageNotCached(BringException):
     error_message = 'The body of message "{}" has not been downloaded yet.'
 
 
+class PendingConflict(BringException):
+    '''
+    A queued operation was abandoned because the server state no longer
+    matches what the user acted on.
+    '''
+    error_message = '{}'
+
+
+class NothingToRestore(BringException):
+    error_message = 'This message has no deleted state to restore.'
+
+
 class BadEmail(BringException):
     error_message = 'Could not parse email "{}".'
 

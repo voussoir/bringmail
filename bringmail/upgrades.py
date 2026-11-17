@@ -312,6 +312,45 @@ def _open_database(data_directory=None):
     )
 
 
+@upgrade_function(1, 2)
+def upgrade_1_to_2(migrator):
+    '''
+    Add the offline pending-operations queue and the messages.local_deleted
+    marker. The queue records the operation and the pre-state the user was
+    looking at so a later flush can detect server divergence.
+    '''
+    migrator.add_column(
+        'messages',
+        'local_deleted',
+        'BOOLEAN NOT NULL DEFAULT 0',
+    )
+    migrator.execute('''
+    CREATE TABLE IF NOT EXISTS pending_operations(
+        id INTEGER PRIMARY KEY,
+        account_id INT NOT NULL,
+        folder_id INT NOT NULL,
+        message_id INT,
+        message_uid INT NOT NULL,
+        message_uidvalidity INT,
+        operation TEXT NOT NULL,
+        enabled INT,
+        base_folder_id INT,
+        target_folder_id INT,
+        target_keywords TEXT,
+        base_modseq INT,
+        observed TEXT,
+        state TEXT NOT NULL,
+        attempts INT NOT NULL,
+        next_attempt INT NOT NULL,
+        last_error TEXT,
+        created INT NOT NULL,
+        updated INT NOT NULL,
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE CASCADE
+    )
+    ''')
+
+
 def upgrade_all(
         data_directory=None,
         *,

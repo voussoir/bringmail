@@ -56,15 +56,19 @@ def _message_list_response(*, folder=None, account=None, all_accounts=False):
     )
     has_more = len(messages) > limit
     messages = messages[:limit]
+    pending = common.pending_states_for_messages(message.id for message in messages)
     response = {
         'type': 'message_list',
-        'messages': [message.jsonify() for message in messages],
+        'messages': [
+            message.jsonify(pending=pending.get(message.id))
+            for message in messages
+        ],
         'has_more': has_more,
     }
     if folder is not None:
         response['folder'] = folder.jsonify()
     elif account is not None:
-        response['account'] = account.jsonify(unread_count=True)
+        response['account'] = account.jsonify(unread_count=True, pending_count=True)
     return flasktools.json_response(response)
 
 

@@ -34,14 +34,19 @@ Features
   usable while bodies fill in newest-first.
 - Read/unread, move to folder, and delete to Trash. Flag state is synchronized
   and retained in the backend, but the web UI does not expose flag controls.
+- Offline queueing of read/unread, move, delete, and undo. Actions are recorded
+  in the local database and replayed when the connection returns; see
+  "Offline actions" below.
 - Clicking a message's read/unread dot toggles that message without opening it.
-- Right-clicking a message offers Mark as read, Mark as unread, Delete, and
-  Move to folder actions.
+- Right-clicking a message offers Mark as read, Mark as unread, Delete, Move to
+  folder, and Undo delete for a pending or flushed delete.
 - The reader opens in plaintext mode by default; HTML remains one click away.
   HTML mail is sanitized server-side and rendered inside a sandboxed iframe.
   Remote images are blocked until you click "Load images"; inline `cid:` images
   come from the local cache.
 - A bottom status bar reports active synchronization progress through SSE.
+- The account list shows `↑` for queued actions and `!` for actions that could
+  not be synced. Right-click an account for Retry pending and Discard pending.
 - The reader panel uses theme-aware dark colors; HTML email content keeps its
   own canvas for sender styling.
 - Message lists load 500 at a time and automatically fetch older messages when
@@ -149,7 +154,7 @@ and any cached credentials in it.
 Database
 --------
 
-The `_bringmail/bringmail.db` schema has three tables:
+The `_bringmail/bringmail.db` schema has four tables:
 
 - `accounts`: IMAP endpoint, username, password, refresh interval, and last
   refresh state.
@@ -158,16 +163,57 @@ The `_bringmail/bringmail.db` schema has three tables:
 - `messages`: one self-contained row per message, with the compressed RFC822
   bytes, a decoded `meta` JSON document, mutable flags, and generated columns
   for `subject`, `from_name`, `from_addr`, `date_unix`, `message_id`, and
-  `has_attachments`.
+  `has_attachments`. `local_deleted` marks a delete that is still queued.
+- `pending_operations`: the offline action queue. Each row records the
+  operation, the message it targets, the state the user was looking at when
+  they acted (`observed`, `base_modseq`), and its delivery state.
 
 The `messages` generated columns are VIRTUAL columns computed with
 `json_extract` from `meta` and indexed for the message list. The database is
 unbounded: BringMail never prunes or expires cached mail. Delete an account to
-remove its cache.
+remove its cache. Sent and superseded `pending_operations` rows are retained as
+history; account badges and queue actions only consider rows that still need
+attention.
 
 If you delete or move a message on the server, the next refresh removes or
-relocates the local row. A UIDVALIDITY change causes that folder's local cache
-to be discarded and re-downloaded.
+relocates the local row, except when a queued operation still refers to that
+message. A UIDVALIDITY change causes that folder's local cache to be discarded
+and re-downloaded.
+
+Offline actions
+---------------
+
+Reading the cache works offline. Write actions are queued and replayed by the
+same background worker that performs refreshes.
+
+- Mark read/unread, move, and delete are applied to the local database
+  immediately and recorded in `pending_operations`.
+- When a connection is available, the queue is flushed one account at a time.
+  The affected folders are synchronized first, so the flush knows the current
+  server state before writing.
+- **Flags**: on servers that advertise CONDSTORE, private flags (`\Seen`,
+  `\Flagged`, `\Answered`) are sent with `UNCHANGEDSINCE`. If another client
+  changed the message in the meantime, BringMail reapplies the user's value
+  once. Keywords and other shared metadata become a conflict instead of
+  overwriting the other client.
+- **Moves and deletes** cannot be made conditional in IMAP. They are validated
+  after the reconcile (message still present, UIDVALIDITY unchanged) and then
+  sent. If the message moved or vanished while BringMail was offline, the
+  queued action is marked conflicted and the local row is left to the next
+  refresh.
+- **Inverse actions cancel**: queuing a read and then an unread returns to the
+  original state and sends nothing. Delete followed by Undo, or a move followed
+  by a move back, cancels the pair as long as neither has reached the server.
+- **Failures are retained**: a connection failure leaves the rows pending with
+  exponential backoff; a server refusal or a conflict moves the row to a
+  visible failed/conflicted state. The account list shows `↑` for waiting
+  actions and `!` for failed ones. Right-click an account for Retry pending and
+  Discard pending. Discarding restores the local cached state recorded before
+  the action and marks the rows superseded without sending them.
+- Servers without CONDSTORE use a read-compare-write fallback. Shared
+  operations may overwrite a change that lands between the read and the write;
+  private flags are applied unconditionally.
+
 
 Upgrading an existing database
 ------------------------------
@@ -203,19 +249,22 @@ Tests
 
 The tests cover message parsing, generated-column queries, local flags,
 pagination, incremental and targeted fake-IMAP sync, UIDVALIDITY resets,
-reusable IMAP sessions, IMAP IDLE sessions and watchers, database schema
-upgrades, and the Flask routes. They do not contact a real mail server.
+reusable IMAP sessions, IMAP IDLE sessions and watchers, the offline pending
+queue (consolidation, conditional flag writes, conflicts, backoff), database
+schema upgrades, and the Flask routes. They do not contact a real mail server.
 
 Architecture
 ------------
 
 - `bringmail/`: core package. `objects.py` contains Account, Folder, and
-  Message; `bringmaildb.py` contains the database and IMAP sync engine;
-  `helpers.py` contains MIME parsing, sanitization, and IMAP connection/session
-  handling; `idle.py` contains the IDLE protocol session; `idle_supervisor.py`
-  contains the reusable watcher threads and reconciliation. Frontends start the
-  supervisor explicitly; importing the package does not start any threads.
-  `upgrades.py` contains the schema migration framework.
+  Message; `bringmaildb.py` contains the database, IMAP sync engine, and the
+  outbox flush; `outbox.py` contains the pending-operation consolidation rules;
+  `helpers.py` contains MIME parsing, sanitization, IMAP connection/session
+  handling, and conditional STORE; `idle.py` contains the IDLE protocol
+  session; `idle_supervisor.py` contains the reusable watcher threads and
+  reconciliation. Frontends start the supervisor explicitly; importing the
+  package does not start any threads. `upgrades.py` contains the schema
+  migration framework.
 - `frontends/bringmail_flask/`: Flask backend and three-panel frontend.
   `backend/common.py` sets up the app, background scheduler, refresh worker, and
   server-sent events. `backend/endpoints/` contains the HTTP API.
@@ -234,7 +283,5 @@ Not implemented
   filter box as BringRSS.
 - Gmail label semantics. A message that exists in several Gmail labels may be
   downloaded once per folder.
-- Offline queueing of write actions. Reading the cache works offline; marking
-  read, moving, and deleting require a working mail server connection.
 - IDLE watches only INBOX. Mail that lands in other folders is picked up by the
   scheduled refresh; watching more folders would require one connection each.

@@ -114,6 +114,7 @@ body.layout_lmr #content_body
 
 #accounts hr
 {
+    grid-area: hr;
     margin: 4px 0;
     border-color: var(--color_transparency);
     width: 100%;
@@ -156,6 +157,26 @@ body.layout_lmr #content_body
     color: #ff6b6b;
 }
 
+/* Pending indicators ********************************************************/
+
+#account_list .pending_count
+{
+    min-width: 1.5em;
+    text-align: right;
+    font-size: 85%;
+}
+
+#account_list .pending_waiting
+{
+    opacity: 0.75;
+}
+
+#account_list .pending_conflict
+{
+    color: #ff6b6b;
+    font-weight: bold;
+}
+
 .empty_message
 {
     padding: 10px;
@@ -188,7 +209,7 @@ body.layout_lmr #content_body
 
 #account_list .account_header
 {
-    grid-template-columns: 1.1em 1.5em minmax(0, 1fr) auto;
+    grid-template-columns: 1.1em 1.5em minmax(0, 1fr) auto auto;
     grid-column-gap: 0.2em;
 }
 
@@ -268,9 +289,9 @@ body.layout_lmr #content_body
 {
     display: grid;
     grid-template:
-        "read from attachment date" auto
-        "subject subject subject subject" auto
-        / 1.2em minmax(0, 1fr) auto max-content;
+        "read from attachment pending date" auto
+        "subject subject subject subject subject" auto
+        / 1.2em minmax(0, 1fr) auto auto max-content;
     grid-column-gap: 0.5em;
     grid-row-gap: 1px;
     align-items: baseline;
@@ -360,6 +381,26 @@ body.layout_lmr #content_body
 {
     grid-area: attachment;
     opacity: 0.7;
+}
+
+#message_list .message .pending_badge
+{
+    grid-area: pending;
+    cursor: default;
+    text-align: center;
+    opacity: 0.8;
+}
+
+#message_list .message .pending_badge:empty
+{
+    display: none;
+}
+
+#message_list .message.pending_conflict .pending_badge
+{
+    color: #ff6b6b;
+    font-weight: bold;
+    opacity: 1;
 }
 
 #message_list .message .date
@@ -555,9 +596,9 @@ body.layout_lmr #content_body
     #message_list .message
     {
         grid-template:
-            "from date" auto
-            "subject subject" auto
-            / minmax(0, 1fr) max-content;
+            "from pending date" auto
+            "subject subject subject" auto
+            / minmax(0, 1fr) auto max-content;
     }
 
     #message_list .message .read_indicator,

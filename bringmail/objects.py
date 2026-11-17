@@ -6,6 +6,7 @@ import typing
 from . import constants
 from . import exceptions
 from . import helpers
+from . import outbox
 
 from voussoirkit import sentinel
 from voussoirkit import vlogging
@@ -30,6 +31,118 @@ def _loads_json(value, default):
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def move_message_on_server(client, *, source_name, destination_name, uid, message_id=None):
+    '''
+    Move one message between two folders on an already-authenticated client.
+
+    This is shared by the direct move path (Message.move_to, used by the CLI
+    and REPL) and by the outbox flush. Returns (new_uid, new_uidvalidity,
+    uid_source), where uid_source is 'copyuid' or 'search'. new_uid may be
+    None when the new UID could not be discovered.
+    '''
+    client.select_folder(source_name, readonly=False)
+
+    # A move/copy assigns the message a new UID in the destination folder.
+    # UIDPLUS servers report that UID in a COPYUID response code, which lets
+    # the caller follow the message directly.
+    before_ok = helpers.untagged_ok_responses(client)
+    before_copyuid = helpers.untagged_copyuid_responses(client)
+    try:
+        response = client.move([uid], destination_name)
+    except Exception:
+        response = client.copy([uid], destination_name)
+        copyuid = helpers.copyuid_from_response(
+            client,
+            response,
+            before=before_ok,
+            before_copyuid=before_copyuid,
+        )
+        client.add_flags([uid], [b'\\Deleted'])
+        client.expunge([uid])
+    else:
+        copyuid = helpers.copyuid_from_response(
+            client,
+            response,
+            before=before_ok,
+            before_copyuid=before_copyuid,
+        )
+
+    if copyuid is not None:
+        (new_uidvalidity, uid_mapping) = copyuid
+        moved_uid = uid_mapping.get(uid)
+        if moved_uid is not None:
+            log.debug(
+                'COPYUID for uid %s -> "%s": destination uid %s, '
+                'destination uidvalidity %s.',
+                uid,
+                destination_name,
+                moved_uid,
+                new_uidvalidity,
+            )
+            return (moved_uid, new_uidvalidity, 'copyuid')
+    else:
+        log.debug(
+            'The move response for uid %s to "%s" did not include a '
+            'usable COPYUID: %r',
+            uid,
+            destination_name,
+            response,
+        )
+        try:
+            capabilities = client.capabilities()
+        except Exception:
+            capabilities = ()
+        log.debug('IMAP capabilities: %s', capabilities)
+
+    # Servers without UIDPLUS (or a usable COPYUID) require a search in the
+    # destination folder to discover the new UID.
+    new_uid = None
+    new_uidvalidity = None
+    if not message_id:
+        log.warning(
+            'Message uid %s has no Message-ID header; cannot search for its '
+            'new UID in "%s".',
+            uid,
+            destination_name,
+        )
+    else:
+        try:
+            selected = client.select_folder(destination_name, readonly=False)
+            new_uidvalidity = selected.get(b'UIDVALIDITY')
+            found = [
+                int(found_uid)
+                for found_uid in client.search(['HEADER', 'Message-ID', message_id])
+            ]
+            log.debug(
+                'Message-ID search for uid %s in "%s" returned UIDs %s.',
+                uid,
+                destination_name,
+                found,
+            )
+            if len(found) == 1:
+                new_uid = found[0]
+            elif len(found) > 1:
+                # A new copy is assigned the highest UID in the mailbox. If
+                # the destination already held another copy of this message,
+                # the moved copy is the newest.
+                new_uid = max(found)
+                log.warning(
+                    'Multiple copies of uid %s match in "%s"; '
+                    'using the newest UID %s.',
+                    uid,
+                    destination_name,
+                    new_uid,
+                )
+        except Exception:
+            log.warning(
+                'Could not search for uid %s in "%s".',
+                uid,
+                destination_name,
+                exc_info=True,
+            )
+    return (new_uid, new_uidvalidity, 'search')
 
 
 class ObjectBase(worms.Object):
@@ -174,7 +287,7 @@ class Account(ObjectBase):
             return float('inf')
         return self.last_refresh_attempt + self.autorefresh_interval
 
-    def jsonify(self, *, folders=False, unread_count=False):
+    def jsonify(self, *, folders=False, unread_count=False, pending_count=False):
         self.assert_not_deleted()
         j = {
             'type': 'account',
@@ -194,6 +307,10 @@ class Account(ObjectBase):
             'last_refresh_error': self.last_refresh_error,
             'next_refresh': self.next_refresh if self.next_refresh != float('inf') else None,
         }
+        if pending_count:
+            summary = self.bringmaildb.get_pending_summary(self)
+            j['pending_count'] = summary['pending']
+            j['conflict_count'] = summary['conflicted'] + summary['failed']
         if folders or unread_count:
             account_folders = self.get_folders()
             counts = self.bringmaildb.get_account_unread_counts(self)
@@ -407,6 +524,7 @@ class Message(ObjectBase):
         self.keywords = _loads_json(db_row['keywords'], [])
         self.modseq = db_row['modseq']
         self.size = db_row['size']
+        self.local_deleted = bool(_row_get(db_row, 'local_deleted', 0))
 
         self.subject = _row_get(db_row, 'subject', self.meta.get('subject'))
         self.from_name = _row_get(db_row, 'from_name', None)
@@ -491,7 +609,7 @@ class Message(ObjectBase):
         (message, meta) = helpers.parse_full_message(raw)
         return helpers.headers_text(message)
 
-    def jsonify(self):
+    def jsonify(self, *, pending=None):
         self.assert_not_deleted()
         return {
             'type': 'message',
@@ -518,6 +636,8 @@ class Message(ObjectBase):
             'has_attachments': self.has_attachments,
             'attachment_count': len(self.meta.get('attachments', [])),
             'body_fetched': self.body_fetched,
+            'local_deleted': self.local_deleted,
+            'pending': pending,
         }
 
     def _set_local_flag(self, column, value):
@@ -546,6 +666,221 @@ class Message(ObjectBase):
         except Exception as exc:
             raise exceptions.MailServerActionError(str(exc))
 
+    # Pending (offline) queue ######################################################################
+
+    def _flag_snapshot(self):
+        '''
+        The pre-state recorded with a queued operation. The flush compares
+        the server against this to decide whether the user's action is still
+        meaningful.
+        '''
+        return {
+            'seen': bool(self.seen),
+            'flagged': bool(self.flagged),
+            'answered': bool(self.answered),
+            'keywords': list(self.keywords or []),
+            'modseq': self.modseq,
+            'folder_id': self.folder_id,
+            'uid': self.uid,
+        }
+
+    def _apply_local(self, pairs):
+        '''
+        Update the local row and this instance. The caller must already hold
+        a database transaction.
+        '''
+        data = {'id': self.id}
+        data.update(pairs)
+        self.bringmaildb.update(table=Message, pairs=data, where_key='id')
+        for (key, value) in pairs.items():
+            setattr(self, key, value)
+
+    def _pending_folder_operations(self):
+        return self.bringmaildb.get_pending_for_message(
+            self.id,
+            states=(constants.PENDING_STATE_PENDING,),
+        )
+
+    def _virtual_folder_id(self):
+        return outbox.virtual_folder_id(
+            self.folder_id,
+            self._pending_folder_operations(),
+        )
+
+    def _queue_flag(self, operation, enabled):
+        if operation not in constants.OPERATION_PRIVATE_FLAGS:
+            raise ValueError(operation)
+        enabled = helpers.normalize_bool(enabled)
+        current = bool(getattr(self, operation))
+        if enabled == current:
+            return False
+
+        self.assert_not_deleted()
+        folder = self.folder
+        if not folder.is_selectable:
+            raise exceptions.FolderNotSelectable(folder.name)
+
+        snapshot = self._flag_snapshot()
+        with self.bringmaildb.transaction:
+            self.bringmaildb.add_pending_operation(
+                account=self.account,
+                folder=folder,
+                operation=operation,
+                message=self,
+                enabled=enabled,
+                base_folder_id=self.folder_id,
+                observed=snapshot,
+                base_modseq=self.modseq,
+            )
+            self._apply_local({operation: enabled})
+        return True
+
+    def queue_seen(self, seen):
+        return self._queue_flag(constants.OPERATION_SEEN, seen)
+
+    def queue_flagged(self, flagged):
+        return self._queue_flag(constants.OPERATION_FLAGGED, flagged)
+
+    def queue_answered(self, answered):
+        return self._queue_flag(constants.OPERATION_ANSWERED, answered)
+
+    def queue_keywords(self, keywords):
+        '''
+        Queue an exact keyword (custom flag) set. Keywords are shared
+        metadata, so the flush uses a conditional write when it can.
+        '''
+        self.assert_not_deleted()
+        target = sorted({str(word) for word in (keywords or [])})
+        current = sorted({str(word) for word in (self.keywords or [])})
+        if target == current:
+            return False
+
+        folder = self.folder
+        if not folder.is_selectable:
+            raise exceptions.FolderNotSelectable(folder.name)
+
+        snapshot = self._flag_snapshot()
+        with self.bringmaildb.transaction:
+            self.bringmaildb.add_pending_operation(
+                account=self.account,
+                folder=folder,
+                operation=constants.OPERATION_KEYWORDS,
+                message=self,
+                target_keywords=target,
+                base_folder_id=self.folder_id,
+                observed=snapshot,
+                base_modseq=self.modseq,
+            )
+            self._apply_local({
+                'keywords': json.dumps(target) if target else None,
+            })
+        self.keywords = target
+        return True
+
+    def queue_move(self, folder):
+        '''
+        Queue a move without touching the server or the local folder. The
+        row keeps its current UID until the flush learns the destination UID
+        from COPYUID (or a Message-ID search).
+        '''
+        self.assert_not_deleted()
+        if not isinstance(folder, Folder):
+            raise TypeError(folder)
+        folder.assert_not_deleted()
+        if folder.account_id != self.account_id:
+            raise exceptions.InvalidFolder('Cannot move a message to another account.')
+        if not folder.is_selectable:
+            raise exceptions.FolderNotSelectable(folder.name)
+
+        base_folder_id = self._virtual_folder_id()
+        if folder.id == base_folder_id:
+            return False
+
+        snapshot = self._flag_snapshot()
+        with self.bringmaildb.transaction:
+            self.bringmaildb.add_pending_operation(
+                account=self.account,
+                folder=self.folder,
+                operation=constants.OPERATION_MOVE,
+                message=self,
+                base_folder_id=base_folder_id,
+                target_folder_id=folder.id,
+                observed=snapshot,
+                base_modseq=self.modseq,
+            )
+        return True
+
+    def queue_delete(self):
+        '''
+        Queue a delete, which is a move to the Trash folder. The local row
+        stays where it is and is marked local_deleted so the UI can show it
+        struck through and offer an undo.
+        '''
+        self.assert_not_deleted()
+        trash = self.account.get_trash_folder()
+        if trash is None:
+            raise exceptions.TrashNotFound()
+
+        base_folder_id = self._virtual_folder_id()
+        if base_folder_id == trash.id:
+            return False
+
+        snapshot = self._flag_snapshot()
+        with self.bringmaildb.transaction:
+            self.bringmaildb.add_pending_operation(
+                account=self.account,
+                folder=self.folder,
+                operation=constants.OPERATION_DELETE,
+                message=self,
+                base_folder_id=base_folder_id,
+                target_folder_id=trash.id,
+                observed=snapshot,
+                base_modseq=self.modseq,
+            )
+            self._apply_local({'local_deleted': True})
+        return True
+
+    def queue_restore(self):
+        '''
+        Queue the inverse of a delete. While the delete is still pending the
+        two cancel; after the delete has reached the server this becomes a
+        real move back to the original folder.
+        '''
+        self.assert_not_deleted()
+        trash = self.account.get_trash_folder()
+        if trash is None:
+            raise exceptions.TrashNotFound()
+
+        delete_operation = self.bringmaildb.get_latest_delete_operation(self.id)
+        if delete_operation is None or delete_operation.base_folder_id is None:
+            raise exceptions.NothingToRestore()
+
+        target_folder_id = delete_operation.base_folder_id
+        base_folder_id = self._virtual_folder_id()
+        if base_folder_id == target_folder_id and not self.local_deleted:
+            return False
+        if not self.local_deleted and self.folder_id != trash.id:
+            raise exceptions.NothingToRestore()
+
+        target = self.bringmaildb.get_folder(target_folder_id)
+        if not target.is_selectable:
+            raise exceptions.FolderNotSelectable(target.name)
+
+        snapshot = self._flag_snapshot()
+        with self.bringmaildb.transaction:
+            self.bringmaildb.add_pending_operation(
+                account=self.account,
+                folder=self.folder,
+                operation=constants.OPERATION_RESTORE,
+                message=self,
+                base_folder_id=base_folder_id,
+                target_folder_id=target_folder_id,
+                observed=snapshot,
+                base_modseq=self.modseq,
+            )
+            self._apply_local({'local_deleted': False})
+        return True
+
     def move_to(self, folder):
         self.assert_not_deleted()
         if not isinstance(folder, Folder):
@@ -564,107 +899,13 @@ class Message(ObjectBase):
         previous_uidvalidity = self.uidvalidity
 
         def operation(client):
-            client.select_folder(source.name, readonly=False)
-
-            # A move/copy assigns the message a new UID in the destination
-            # folder. UIDPLUS servers report that UID in a COPYUID response
-            # code, which lets the local row follow the message directly.
-            before_ok = helpers.untagged_ok_responses(client)
-            before_copyuid = helpers.untagged_copyuid_responses(client)
-            try:
-                response = client.move([self.uid], folder.name)
-            except Exception:
-                response = client.copy([self.uid], folder.name)
-                copyuid = helpers.copyuid_from_response(
-                    client,
-                    response,
-                    before=before_ok,
-                    before_copyuid=before_copyuid,
-                )
-                client.add_flags([self.uid], [b'\\Deleted'])
-                client.expunge([self.uid])
-            else:
-                copyuid = helpers.copyuid_from_response(
-                    client,
-                    response,
-                    before=before_ok,
-                    before_copyuid=before_copyuid,
-                )
-
-            if copyuid is not None:
-                (new_uidvalidity, uid_mapping) = copyuid
-                moved_uid = uid_mapping.get(self.uid)
-                if moved_uid is not None:
-                    log.debug(
-                        'COPYUID for message %s: source uid %s -> destination uid %s, '
-                        'destination uidvalidity %s.',
-                        self.id,
-                        self.uid,
-                        moved_uid,
-                        new_uidvalidity,
-                    )
-                    return (moved_uid, new_uidvalidity, 'copyuid')
-            else:
-                log.debug(
-                    'The move response for message %s to "%s" did not include a '
-                    'usable COPYUID: %r',
-                    self.id,
-                    folder.name,
-                    response,
-                )
-                try:
-                    capabilities = client.capabilities()
-                except Exception:
-                    capabilities = ()
-                log.debug('IMAP capabilities: %s', capabilities)
-
-            # Servers without UIDPLUS (or a usable COPYUID) require a search
-            # in the destination folder to discover the new UID.
-            new_uid = None
-            new_uidvalidity = None
-            if not self.message_id:
-                log.warning(
-                    'Message %s has no Message-ID header; cannot search for its '
-                    'new UID in "%s".',
-                    self.id,
-                    folder.name,
-                )
-            else:
-                try:
-                    selected = client.select_folder(folder.name, readonly=False)
-                    new_uidvalidity = selected.get(b'UIDVALIDITY')
-                    found = [
-                        int(uid)
-                        for uid in client.search(['HEADER', 'Message-ID', self.message_id])
-                    ]
-                    log.debug(
-                        'Message-ID search for message %s in "%s" returned UIDs %s.',
-                        self.id,
-                        folder.name,
-                        found,
-                    )
-                    if len(found) == 1:
-                        new_uid = found[0]
-                    elif len(found) > 1:
-                        # A new copy is assigned the highest UID in the
-                        # mailbox. If the destination already held another
-                        # copy of this message, the moved copy is the newest.
-                        new_uid = max(found)
-                        log.warning(
-                            'Multiple copies of message %s match in "%s"; '
-                            'using the newest UID %s.',
-                            self.id,
-                            folder.name,
-                            new_uid,
-                        )
-                except Exception:
-                    log.warning(
-                        'Could not search for message %s in "%s".',
-                        self.id,
-                        folder.name,
-                        exc_info=True,
-                    )
-            return (new_uid, new_uidvalidity, 'search')
+            return move_message_on_server(
+                client,
+                source_name=source.name,
+                destination_name=folder.name,
+                uid=self.uid,
+                message_id=self.message_id,
+            )
 
         try:
             (new_uid, new_uidvalidity, uid_source) = helpers.imap_call(account, operation)

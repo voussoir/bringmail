@@ -69,6 +69,49 @@ class UpgradeTest(unittest.TestCase):
             skip_version_check=True,
         )
 
+    def test_upgrade_1_to_2_creates_pending_queue(self):
+        self.make_database()
+
+        # Reshape the current database back to the version 1 schema so the
+        # real migration can be exercised.
+        db = self.open_database()
+        try:
+            with db.transaction:
+                db.execute('DROP TABLE IF EXISTS pending_operations')
+                db.execute('ALTER TABLE messages DROP COLUMN local_deleted')
+                db.pragma_write('user_version', 1)
+        finally:
+            db.close()
+
+        report = upgrades.upgrade_all(data_directory=self.tempdir.name)
+        self.assertEqual(report.pending, (2,))
+        self.assertEqual(report.applied, (2,))
+        self.assertIsNotNone(report.backup)
+
+        db = self.open_database()
+        try:
+            self.assertEqual(db.pragma_read('user_version'), 2)
+            tables = [
+                row['name']
+                for row in db.select("SELECT name FROM sqlite_master WHERE type == 'table'")
+            ]
+            self.assertIn('pending_operations', tables)
+            columns = [
+                row['name']
+                for row in db.sql_write.execute('PRAGMA table_xinfo("messages")').fetchall()
+            ]
+            self.assertIn('local_deleted', columns)
+            indexes = [
+                row['name']
+                for row in db.select("SELECT name FROM sqlite_master WHERE type == 'index'")
+            ]
+            self.assertIn('index_pending_ops_account_state', indexes)
+            self.assertIn('index_pending_ops_message', indexes)
+            self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM messages'), 1)
+            self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM pending_operations'), 0)
+        finally:
+            db.close()
+
     def test_upgrade_all_is_a_noop_for_current_database(self):
         self.make_database()
         report = upgrades.upgrade_all(data_directory=self.tempdir.name)

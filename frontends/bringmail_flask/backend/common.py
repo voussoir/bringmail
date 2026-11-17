@@ -203,6 +203,32 @@ def get_messages(message_ids):
     )
 
 
+PENDING_VISIBLE_STATES = (
+    bringmail.constants.PENDING_STATE_PENDING,
+    bringmail.constants.PENDING_STATE_CONFLICTED,
+    bringmail.constants.PENDING_STATE_FAILED,
+)
+
+
+def pending_states_for_messages(message_ids):
+    '''
+    Map message_id -> {operation, label, state} for the newest visible queued
+    operation on each message.
+    '''
+    message_ids = [int(message_id) for message_id in message_ids]
+    if not message_ids:
+        return {}
+    rows = bringdb.get_pending_operations(
+        message_ids=message_ids,
+        states=PENDING_VISIBLE_STATES,
+    )
+    return bringmail.outbox.pending_message_states(rows)
+
+
+def pending_state_for(message):
+    return pending_states_for_messages([message.id]).get(message.id)
+
+
 # Other functions ##################################################################################
 
 def get_layout():
@@ -239,6 +265,10 @@ REFRESH_QUEUE = queue.PriorityQueue()
 _REFRESH_QUEUE_SET = set()
 _REFRESH_QUEUE_LOCK = threading.Lock()
 _REFRESH_SEQUENCE = itertools.count()
+# A flush requested while the account's previous flush job was still queued or
+# running. The job is enqueued again when that job finishes, so operations
+# queued during a flush are not left waiting for the next scheduled refresh.
+_FLUSH_REQUEUE = set()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -248,16 +278,53 @@ class RefreshJob:
     manual: bool = False
 
 
+@dataclasses.dataclass(frozen=True)
+class FlushJob:
+    '''
+    Send this account's queued offline operations. Runs on the same worker as
+    refreshes so a flush and a sync never race over the same rows.
+    '''
+    account_id: int
+    manual: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class DiscardJob:
+    '''
+    Abandon this account's visible queued operations. Runs on the same worker
+    as flushes so an in-progress flush cannot send an action that has just been
+    discarded.
+    '''
+    account_id: int
+    manual: bool = False
+
+
+def _job_key(job):
+    if isinstance(job, DiscardJob):
+        return (job.account_id, 'discard')
+    if isinstance(job, FlushJob):
+        return (job.account_id, 'flush')
+    return (job.account_id, job.folder_id)
+
+
 def _enqueue_refresh_job(job):
-    key = (job.account_id, job.folder_id)
+    key = _job_key(job)
     with _REFRESH_QUEUE_LOCK:
         if key in _REFRESH_QUEUE_SET:
             return False
         _REFRESH_QUEUE_SET.add(key)
 
-    # Manual jobs run before automatic ones. The sequence number keeps the
-    # priority queue from ever comparing two RefreshJob objects.
-    priority = 0 if job.manual else 1
+    # Manual jobs run before automatic ones. Flushes run before refreshes so
+    # queued user actions reach the server before new remote state is pulled
+    # in. A discard jumps ahead of both so the user can cancel actions that
+    # have not started yet. The sequence number keeps the priority queue from
+    # ever comparing two job objects.
+    if isinstance(job, DiscardJob):
+        priority = -1
+    elif job.manual or isinstance(job, FlushJob):
+        priority = 0
+    else:
+        priority = 1
     REFRESH_QUEUE.put((priority, next(_REFRESH_SEQUENCE), job))
     return True
 
@@ -280,6 +347,27 @@ def add_folder_to_refresh_queue(folder, *, manual=False):
         log.debug('Adding folder %s to refresh queue.', folder)
 
 
+def add_flush_to_queue(account, *, manual=False):
+    if not isinstance(account, bringmail.objects.Account):
+        account = bringdb.get_account(account)
+
+    job = FlushJob(account.id, manual)
+    if _enqueue_refresh_job(job):
+        log.debug('Adding %s to outbox flush queue.', account)
+        return
+    with _REFRESH_QUEUE_LOCK:
+        _FLUSH_REQUEUE.add(account.id)
+
+
+def add_discard_to_queue(account, *, manual=True):
+    if not isinstance(account, bringmail.objects.Account):
+        account = bringdb.get_account(account)
+
+    job = DiscardJob(account.id, manual)
+    if _enqueue_refresh_job(job):
+        log.debug('Adding %s to pending discard queue.', account)
+
+
 def clear_refresh_queue():
     with _REFRESH_QUEUE_LOCK:
         while not REFRESH_QUEUE.empty():
@@ -288,6 +376,7 @@ def clear_refresh_queue():
             except queue.Empty:
                 break
         _REFRESH_QUEUE_SET.clear()
+        _FLUSH_REQUEUE.clear()
 
 
 def autorefresh_thread():
@@ -309,6 +398,15 @@ def autorefresh_thread():
         now = bringmail.helpers.now()
         soonest = now + 3600
         for account in list(bringdb.get_accounts()):
+            try:
+                if bringdb.has_due_pending(account):
+                    add_flush_to_queue(account)
+                pending_next = bringdb.get_next_pending_attempt(account)
+                if pending_next is not None:
+                    soonest = min(soonest, pending_next)
+            except Exception:
+                log.debug('Could not check the pending queue for %s.', account, exc_info=True)
+
             next_refresh = account.next_refresh
             if now > next_refresh:
                 add_account_to_refresh_queue(account)
@@ -394,6 +492,42 @@ def _folder_refresh(account, folder_id):
     return error
 
 
+def _flush_account(account):
+    '''
+    Send queued offline operations for one account and report the outcome.
+    '''
+    flasktools.send_sse(
+        event='outbox_started',
+        data=json.dumps({'account_id': account.id}),
+    )
+
+    def progress(payload):
+        flasktools.send_sse(
+            event='outbox_progress',
+            data=json.dumps(payload),
+        )
+
+    summary = bringdb.flush_pending(account, progress=progress)
+    flasktools.send_sse(
+        event='outbox_finished',
+        data=json.dumps(summary),
+    )
+    return summary
+
+
+def _discard_account(account):
+    '''
+    Abandon the account's visible queued operations and report the outcome.
+    '''
+    summary = bringdb.discard_pending(account)
+    summary['account_id'] = account.id
+    flasktools.send_sse(
+        event='pending_discarded',
+        data=json.dumps(summary),
+    )
+    return summary
+
+
 def refresh_queue_thread():
     '''
     One worker performs all syncs so SQLite writes are serialized and only one
@@ -411,14 +545,34 @@ def refresh_queue_thread():
 
         try:
             account = bringdb.get_account(job.account_id)
-            if job.folder_id is None:
+            if isinstance(job, FlushJob):
+                _flush_account(account)
+            elif isinstance(job, DiscardJob):
+                _discard_account(account)
+            elif job.folder_id is None:
                 _account_refresh(account)
             else:
                 _folder_refresh(account, job.folder_id)
         except Exception:
             error = traceback.format_exc()
             log.warning('Refreshing %s raised:\n%s', job, error)
-            if job.folder_id is None:
+            if isinstance(job, FlushJob):
+                flasktools.send_sse(
+                    event='outbox_finished',
+                    data=json.dumps({
+                        'account_id': job.account_id,
+                        'error': error,
+                    }),
+                )
+            elif isinstance(job, DiscardJob):
+                flasktools.send_sse(
+                    event='pending_discarded',
+                    data=json.dumps({
+                        'account_id': job.account_id,
+                        'error': error,
+                    }),
+                )
+            elif job.folder_id is None:
                 flasktools.send_sse(
                     event='account_refresh_finished',
                     data=json.dumps({
@@ -437,7 +591,18 @@ def refresh_queue_thread():
                 )
         finally:
             with _REFRESH_QUEUE_LOCK:
-                _REFRESH_QUEUE_SET.discard((job.account_id, job.folder_id))
+                _REFRESH_QUEUE_SET.discard(_job_key(job))
+                requeue_flush = (
+                    isinstance(job, FlushJob) and
+                    job.account_id in _FLUSH_REQUEUE
+                )
+                if requeue_flush:
+                    _FLUSH_REQUEUE.discard(job.account_id)
+            if requeue_flush:
+                try:
+                    add_flush_to_queue(job.account_id)
+                except Exception:
+                    log.debug('Could not requeue the outbox flush.', exc_info=True)
             if REFRESH_QUEUE.empty():
                 flasktools.send_sse(event='account_refresh_queue_finished', data='')
             if supervisor is not None:

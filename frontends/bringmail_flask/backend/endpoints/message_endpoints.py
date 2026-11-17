@@ -19,6 +19,25 @@ def _message_response(message):
     return flasktools.json_response(body)
 
 
+def _jsonify_with_pending(message):
+    pending = common.pending_state_for(message)
+    return flasktools.json_response(message.jsonify(pending=pending))
+
+
+def _queue_batch(messages, action):
+    '''
+    Apply a queued action to every message, then ask for one flush per
+    account involved. Messages can span accounts in the All view.
+    '''
+    accounts = {}
+    for message in messages:
+        action(message)
+        accounts[message.account_id] = message.account
+    for account in accounts.values():
+        common.add_flush_to_queue(account)
+    return flasktools.json_response([message.id for message in messages])
+
+
 @site.route('/message/<message_id>.json')
 def get_message_json(message_id):
     message = common.get_message(message_id, response_type='json')
@@ -59,8 +78,9 @@ def post_message_set_seen(message_id):
         seen = stringtools.truthystring(request.form['seen'])
     except ValueError:
         return flasktools.json_response({}, status=400)
-    message.set_seen(seen)
-    return flasktools.json_response(message.jsonify())
+    message.queue_seen(seen)
+    common.add_flush_to_queue(message.account)
+    return _jsonify_with_pending(message)
 
 
 @site.route('/message/<message_id>/set_flagged', methods=['POST'])
@@ -71,8 +91,9 @@ def post_message_set_flagged(message_id):
         flagged = stringtools.truthystring(request.form['flagged'])
     except ValueError:
         return flasktools.json_response({}, status=400)
-    message.set_flagged(flagged)
-    return flasktools.json_response(message.jsonify())
+    message.queue_flagged(flagged)
+    common.add_flush_to_queue(message.account)
+    return _jsonify_with_pending(message)
 
 
 @site.route('/message/<message_id>/move', methods=['POST'])
@@ -80,19 +101,25 @@ def post_message_set_flagged(message_id):
 def post_message_move(message_id):
     message = common.get_message(message_id, response_type='json')
     folder = common.get_folder(request.form['folder_id'], response_type='json')
-    message.move_to(folder)
-    if message.deleted:
-        return flasktools.json_response({'type': 'message', 'id': message.id, 'deleted': True})
-    return flasktools.json_response(message.jsonify())
+    message.queue_move(folder)
+    common.add_flush_to_queue(message.account)
+    return _jsonify_with_pending(message)
 
 
 @site.route('/message/<message_id>/delete', methods=['POST'])
 def post_message_delete(message_id):
     message = common.get_message(message_id, response_type='json')
-    message.delete()
-    if message.deleted:
-        return flasktools.json_response({'type': 'message', 'id': message.id, 'deleted': True})
-    return flasktools.json_response(message.jsonify())
+    message.queue_delete()
+    common.add_flush_to_queue(message.account)
+    return _jsonify_with_pending(message)
+
+
+@site.route('/message/<message_id>/restore', methods=['POST'])
+def post_message_restore(message_id):
+    message = common.get_message(message_id, response_type='json')
+    message.queue_restore()
+    common.add_flush_to_queue(message.account)
+    return _jsonify_with_pending(message)
 
 
 def _parse_message_ids():
@@ -105,9 +132,7 @@ def post_batch_messages_set_seen():
     message_ids = _parse_message_ids()
     seen = stringtools.truthystring(request.form['seen'])
     messages = list(common.get_messages(message_ids, response_type='json'))
-    for message in messages:
-        message.set_seen(seen)
-    return flasktools.json_response([message.id for message in messages])
+    return _queue_batch(messages, lambda message: message.queue_seen(seen))
 
 
 @site.route('/batch/messages/set_flagged', methods=['POST'])
@@ -116,9 +141,7 @@ def post_batch_messages_set_flagged():
     message_ids = _parse_message_ids()
     flagged = stringtools.truthystring(request.form['flagged'])
     messages = list(common.get_messages(message_ids, response_type='json'))
-    for message in messages:
-        message.set_flagged(flagged)
-    return flasktools.json_response([message.id for message in messages])
+    return _queue_batch(messages, lambda message: message.queue_flagged(flagged))
 
 
 @site.route('/batch/messages/move', methods=['POST'])
@@ -127,9 +150,7 @@ def post_batch_messages_move():
     message_ids = _parse_message_ids()
     folder = common.get_folder(request.form['folder_id'], response_type='json')
     messages = list(common.get_messages(message_ids, response_type='json'))
-    for message in messages:
-        message.move_to(folder)
-    return flasktools.json_response([message.id for message in messages])
+    return _queue_batch(messages, lambda message: message.queue_move(folder))
 
 
 @site.route('/batch/messages/delete', methods=['POST'])
@@ -137,6 +158,12 @@ def post_batch_messages_move():
 def post_batch_messages_delete():
     message_ids = _parse_message_ids()
     messages = list(common.get_messages(message_ids, response_type='json'))
-    for message in messages:
-        message.delete()
-    return flasktools.json_response([message.id for message in messages])
+    return _queue_batch(messages, lambda message: message.queue_delete())
+
+
+@site.route('/batch/messages/restore', methods=['POST'])
+@flasktools.required_fields(['message_ids'])
+def post_batch_messages_restore():
+    message_ids = _parse_message_ids()
+    messages = list(common.get_messages(message_ids, response_type='json'))
+    return _queue_batch(messages, lambda message: message.queue_restore())
