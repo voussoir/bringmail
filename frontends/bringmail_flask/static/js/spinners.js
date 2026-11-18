@@ -2,26 +2,34 @@ const spinners = {};
 
 spinners.BAIL = "spinners.BAIL";
 
-spinners.Spinner = function Spinner(element) {
+spinners.Spinner = function Spinner(element)
+{
     this.element = element;
     this.delayed_showing_timeout = null;
 
-    this.show = function(delay) {
+    this.show = function(delay)
+    {
         clearTimeout(this.delayed_showing_timeout);
-        if (delay) {
+        if (delay)
+        {
             this.delayed_showing_timeout = setTimeout(() => this.show(), delay);
-        } else {
+        }
+        else
+        {
             this.delayed_showing_timeout = null;
-            if (this.element) {
+            if (this.element)
+            {
                 this.element.classList.remove("hidden");
             }
         }
     };
 
-    this.hide = function() {
+    this.hide = function()
+    {
         clearTimeout(this.delayed_showing_timeout);
         this.delayed_showing_timeout = null;
-        if (this.element) {
+        if (this.element)
+        {
             this.element.classList.add("hidden");
         }
     };
@@ -29,18 +37,23 @@ spinners.Spinner = function Spinner(element) {
 
 spinners.button_spinner_index = 0;
 
-spinners.close_button_spinner = function(button) {
-    if (!button) {
+spinners.close_button_spinner = function(button)
+{
+    if (!button)
+    {
         return;
     }
     const closer = button.dataset.spinnerCloser;
-    if (closer && window[closer]) {
+    if (closer && window[closer])
+    {
         window[closer]();
     }
 };
 
-spinners.init_button_with_spinner = function() {
-    for (const button of document.getElementsByClassName("button_with_spinner")) {
+spinners.init_button_with_spinner = function()
+{
+    for (const button of document.getElementsByClassName("button_with_spinner"))
+    {
         button.classList.remove("button_with_spinner");
         button.innerHTML = button.innerHTML.trim();
 
@@ -59,11 +72,13 @@ spinners.init_button_with_spinner = function() {
 
         const opener_name = `spinner_opener_${spinners.button_spinner_index}`;
         const closer_name = `spinner_closer_${spinners.button_spinner_index}`;
-        window[opener_name] = function() {
+        window[opener_name] = function()
+        {
             spinner.show(delay);
             button.disabled = true;
         };
-        window[closer_name] = function() {
+        window[closer_name] = function()
+        {
             spinner.hide();
             button.disabled = false;
         };
@@ -72,13 +87,16 @@ spinners.init_button_with_spinner = function() {
 
         const wrapped_onclick = button.onclick;
         button.removeAttribute("onclick");
-        button.onclick = function(event) {
+        button.onclick = function(event)
+        {
             window[opener_name]();
-            if (!wrapped_onclick) {
+            if (!wrapped_onclick)
+            {
                 return;
             }
             const result = wrapped_onclick(event);
-            if (result === spinners.BAIL) {
+            if (result === spinners.BAIL)
+            {
                 window[closer_name]();
             }
             return result;
@@ -88,7 +106,8 @@ spinners.init_button_with_spinner = function() {
     }
 };
 
-spinners.on_pageload = function() {
+spinners.on_pageload = function()
+{
     spinners.init_button_with_spinner();
 };
 

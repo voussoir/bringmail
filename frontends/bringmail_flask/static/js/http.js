@@ -2,22 +2,29 @@ const http = {};
 
 http.HEADERS = {};
 
-http.formdata = function formdata(data) {
+http.formdata = function formdata(data)
+{
     const fd = new FormData();
-    for (const [key, value] of Object.entries(data)) {
-        if (value === undefined) {
+    for (const [key, value] of Object.entries(data))
+    {
+        if (value === undefined)
+        {
             continue;
         }
-        if (value === null) {
+        if (value === null)
+        {
             fd.append(key, "");
-        } else {
+        }
+        else
+        {
             fd.append(key, value);
         }
     }
     return fd;
 };
 
-http._request = function _request(kwargs) {
+http._request = function _request(kwargs)
+{
     const request = new XMLHttpRequest();
     const response = {
         meta: {
@@ -28,58 +35,79 @@ http._request = function _request(kwargs) {
             json_ok: false,
             kwargs: kwargs,
         },
-        retry: function() { http._request(kwargs); },
+        retry: function()
+        {
+            http._request(kwargs);
+        },
     };
 
-    request.onreadystatechange = function() {
-        if (request.readyState !== 4) {
+    request.onreadystatechange = function()
+    {
+        if (request.readyState !== 4)
+        {
             return;
         }
         response.meta.status = request.status;
-        if (request.status !== 0) {
+        if (request.status !== 0)
+        {
             response.meta.completed = true;
-            try {
+            try
+            {
                 response.data = JSON.parse(request.responseText);
                 response.meta.json_ok = true;
-            } catch (exc) {
+            }
+            catch (exc)
+            {
                 response.meta.json_ok = false;
                 response.text = request.responseText;
             }
         }
-        if (kwargs.callback) {
+        if (kwargs.callback)
+        {
             kwargs.callback(response);
         }
     };
 
     request.open(kwargs.method, kwargs.url, true);
 
-    for (const [header, value] of Object.entries(http.HEADERS)) {
+    for (const [header, value] of Object.entries(http.HEADERS))
+    {
         request.setRequestHeader(header, value);
     }
-    for (const [header, value] of Object.entries(kwargs.headers || {})) {
+    for (const [header, value] of Object.entries(kwargs.headers || {}))
+    {
         request.setRequestHeader(header, value);
     }
 
     let data = kwargs.data;
-    if (data === undefined || data === null) {
+    if (data === undefined || data === null)
+    {
         request.send();
-    } else if (data instanceof FormData) {
+    }
+    else if (data instanceof FormData)
+    {
         request.send(data);
-    } else if (typeof data === "string") {
+    }
+    else if (typeof data === "string")
+    {
         request.send(data);
-    } else {
+    }
+    else
+    {
         request.send(http.formdata(data));
     }
 
     return request;
 };
 
-http.get = function get(kwargs) {
+http.get = function get(kwargs)
+{
     kwargs.method = "GET";
     return http._request(kwargs);
 };
 
-http.post = function post(kwargs) {
+http.post = function post(kwargs)
+{
     kwargs.method = "POST";
     kwargs.headers = Object.assign(
         {"X-BringMail-Request": "1"},
