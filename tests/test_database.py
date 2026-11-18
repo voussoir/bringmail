@@ -214,6 +214,62 @@ class DatabaseTest(unittest.TestCase):
                     password='different',
                 )
 
+    def test_reorder_accounts(self):
+        first = self.make_account(username='first@example.com')
+        second = self.make_account(username='second@example.com')
+        with self.db.transaction:
+            offline = self.db.add_account(label='Offline', offline=True)
+
+        self.assertEqual(
+            [account.id for account in self.db.get_accounts()],
+            [first.id, second.id, offline.id],
+        )
+
+        with self.db.transaction:
+            ordered = self.db.reorder_accounts([offline.id, first.id, second.id])
+
+        self.assertEqual(
+            [account.id for account in ordered],
+            [offline.id, first.id, second.id],
+        )
+        # Discard the cached objects so the order and ranks below come from the
+        # database rather than from the instances the setters updated.
+        self.db.clear_object_caches()
+        self.assertEqual(
+            [account.id for account in self.db.get_accounts()],
+            [offline.id, first.id, second.id],
+        )
+        self.assertEqual(
+            [account.ui_order_rank for account in self.db.get_accounts()],
+            [1.0, 2.0, 3.0],
+        )
+
+    def test_reorder_accounts_requires_every_account(self):
+        first = self.make_account(username='first@example.com')
+        second = self.make_account(username='second@example.com')
+        unknown_id = max(first.id, second.id) + 1
+
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.reorder_accounts([first.id])
+
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.reorder_accounts([first.id, first.id])
+
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.reorder_accounts([first.id, unknown_id])
+
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.reorder_accounts([])
+
+        self.assertEqual(
+            [account.id for account in self.db.get_accounts()],
+            [first.id, second.id],
+        )
+
     def test_account_aggregate_folders(self):
         account = self.make_account()
         inbox = self.make_folder(account)

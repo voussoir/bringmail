@@ -9,6 +9,14 @@ api.accounts.get_accounts = function(callback) {
     return http.get({url: "/accounts.json", callback: callback});
 };
 
+api.accounts.reorder = function(account_ids, callback) {
+    return http.post({
+        url: "/accounts/reorder",
+        data: {"account_ids": account_ids.join(",")},
+        callback: callback,
+    });
+};
+
 api.accounts.get_messages = function(account_id, parameters, callback) {
     let query = new URLSearchParams(parameters || {});
     query = query.toString();

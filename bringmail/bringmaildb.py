@@ -259,6 +259,34 @@ class BDBAccountMixin:
         )
         return rank or 0
 
+    @worms.atomic
+    def reorder_accounts(self, account_ids):
+        '''
+        Assign each account a contiguous ui_order_rank that matches the given
+        order, and return the accounts in that new order.
+
+        account_ids must contain every existing account id exactly once. A
+        stale client that does not know about a newer account is rejected
+        instead of letting that account silently fall to the bottom of the
+        list.
+        '''
+        account_ids = [int(account_id) for account_id in account_ids]
+        if not account_ids:
+            raise exceptions.InvalidAccount('No account ids were provided.')
+        if len(set(account_ids)) != len(account_ids):
+            raise exceptions.InvalidAccount('The account ids contain duplicates.')
+
+        accounts = {account.id: account for account in self.get_accounts()}
+        if set(account_ids) != set(accounts):
+            raise exceptions.InvalidAccount(
+                'The account ids must contain every account exactly once.'
+            )
+
+        ordered = [accounts[account_id] for account_id in account_ids]
+        for (index, account) in enumerate(ordered):
+            account.set_ui_order_rank(index + 1)
+        return ordered
+
 
 class BDBFolderMixin:
     def __init__(self):

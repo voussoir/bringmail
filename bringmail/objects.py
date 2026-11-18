@@ -429,6 +429,14 @@ class Account(ObjectBase):
         self.starttls = starttls
 
     @worms.atomic
+    def set_ui_order_rank(self, ui_order_rank):
+        self.assert_not_deleted()
+        ui_order_rank = self.normalize_ui_order_rank(ui_order_rank)
+        pairs = {'id': self.id, 'ui_order_rank': ui_order_rank}
+        self.bringmaildb.update(table=Account, pairs=pairs, where_key='id')
+        self.ui_order_rank = ui_order_rank
+
+    @worms.atomic
     def set_username(self, username):
         self.assert_not_deleted()
         self._assert_online('a username')

@@ -95,6 +95,7 @@ class FlaskTest(unittest.TestCase):
                 b'context_discard_pending_button',
                 b'message_context_move_list'):
             self.assertIn(b'id="' + element_id + b'"', response.data)
+        self.assertNotIn(b'id="move_select"', response.data)
         self.assertNotIn(b'id="pending_panel"', response.data)
 
     def test_root_has_no_flag_controls(self):
@@ -442,6 +443,60 @@ class FlaskTest(unittest.TestCase):
             headers={'X-BringMail-Request': '1'},
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_accounts_reorder(self):
+        with self.db.transaction:
+            second = self.db.add_account(
+                label='Second',
+                host='imap.example.com',
+                port=993,
+                ssl=True,
+                starttls=False,
+                username='second@example.com',
+                password='hunter2',
+                autorefresh_interval=900,
+            )
+
+        response = self.client.post(
+            '/accounts/reorder',
+            data={'account_ids': f'{second.id},{self.account.id}'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [account['id'] for account in response.get_json()],
+            [second.id, self.account.id],
+        )
+        self.db.clear_object_caches()
+        self.assertEqual(
+            [account.id for account in self.db.get_accounts()],
+            [second.id, self.account.id],
+        )
+        self.assertEqual(
+            [account.ui_order_rank for account in self.db.get_accounts()],
+            [1.0, 2.0],
+        )
+
+        response = self.client.post(
+            '/accounts/reorder',
+            data={'account_ids': str(self.account.id)},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            '/accounts/reorder',
+            data={'account_ids': 'not-an-id'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_accounts_reorder_requires_csrf_header(self):
+        response = self.client.post(
+            '/accounts/reorder',
+            data={'account_ids': str(self.account.id)},
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_idle_status_endpoint(self):
         response = self.client.get('/idle/status.json')

@@ -55,6 +55,24 @@ def post_accounts_refresh_all():
     return flasktools.json_response({})
 
 
+@site.route('/accounts/reorder', methods=['POST'])
+def post_accounts_reorder():
+    raw_ids = request.form.get('account_ids', '')
+    try:
+        account_ids = [int(value) for value in raw_ids.split(',') if value.strip()]
+        with common.bringdb.transaction:
+            accounts = common.bringdb.reorder_accounts(account_ids)
+    except bringmail.exceptions.InvalidAccount as exc:
+        return _invalid(exc.error_message)
+    except (TypeError, ValueError) as exc:
+        return _invalid(str(exc))
+
+    return flasktools.json_response([
+        account.jsonify(folders=True, unread_count=True, pending_count=True)
+        for account in accounts
+    ])
+
+
 @site.route('/account/<account_id>.json')
 def get_account_json(account_id):
     account = common.get_account(account_id, response_type='json')

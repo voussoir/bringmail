@@ -60,6 +60,14 @@ let message_context_ids = [];
 let drag_message_ids = [];
 let drag_source_account_ids = new Set();
 
+// Reordering the account tree uses the same panel-level drag events as moving
+// messages into folders. drag_account_id is non-null only while an account
+// header is being dragged, which keeps the two drags separate.
+let drag_account_id = null;
+let account_drop_target = null;
+let account_drop_before = false;
+let suppress_account_click_until = 0;
+
 let accounts_data = [];
 let active_kind = null;
 let active_id = null;
@@ -208,6 +216,9 @@ function load_accounts(callback) {
 }
 
 function render_accounts() {
+    // A background refresh can rebuild this tree in the middle of a drag. Drop
+    // the drag state so the new rows are not tied to detached elements.
+    clear_account_drag_state();
     common.delete_all_children(accounts_element);
 
     const all_div = document.createElement("div");
@@ -248,6 +259,7 @@ function render_accounts() {
         const header = document.createElement("div");
         header.classList.add("account_header");
         header.dataset.accountId = account.id;
+        header.draggable = true;
 
         const toggle = document.createElement("button");
         toggle.type = "button";
@@ -299,6 +311,11 @@ function render_accounts() {
         header.appendChild(pending);
 
         header.addEventListener("click", function() {
+            // The click that can follow a drag that never left its origin must
+            // not move the selection to the account the user just grabbed.
+            if (Date.now() < suppress_account_click_until) {
+                return;
+            }
             select_account(account.id);
         });
         header.addEventListener("dblclick", function(event) {
@@ -308,6 +325,8 @@ function render_accounts() {
         header.addEventListener("contextmenu", function(event) {
             show_account_contextmenu(event, "account", account.id, account.id, account.display_name);
         });
+        header.addEventListener("dragstart", on_account_dragstart);
+        header.addEventListener("dragend", on_account_dragend);
 
         account_div.appendChild(header);
         update_collapse_toggle(account_div);
@@ -357,7 +376,6 @@ function render_accounts() {
 
     update_active_classes();
     update_unread_displays();
-    build_move_options();
 }
 
 function retry_pending_actions(account_id) {
@@ -539,7 +557,6 @@ function select_all_accounts() {
 
     update_active_classes();
     load_messages(true);
-    build_move_options();
 }
 
 function select_account(account_id) {
@@ -559,7 +576,6 @@ function select_account(account_id) {
 
     update_active_classes();
     load_messages(true);
-    build_move_options();
 }
 
 function select_folder(folder_id) {
@@ -587,42 +603,6 @@ function select_folder(folder_id) {
 
     update_active_classes();
     load_messages(true);
-    build_move_options();
-}
-
-function build_move_options() {
-    const select = document.getElementById("move_select");
-    common.delete_all_children(select);
-    const first = document.createElement("option");
-    first.value = "";
-    first.textContent = "Move to...";
-    select.appendChild(first);
-
-    const account = find_account(active_account_id);
-    if (!account) {
-        select.disabled = true;
-        return;
-    }
-    select.disabled = false;
-    // A trashed message is no longer in the active folder, so that folder has
-    // to remain a valid destination while trashed rows are still on screen.
-    const include_active_folder = active_kind === "folder" && trashed_ids.size > 0;
-    for (const folder of account.folders) {
-        if (!folder.selectable) {
-            continue;
-        }
-        if (
-            active_kind === "folder" &&
-            String(folder.id) === String(active_id) &&
-            !include_active_folder
-        ) {
-            continue;
-        }
-        const option = document.createElement("option");
-        option.value = folder.id;
-        option.textContent = folder.name;
-        select.appendChild(option);
-    }
 }
 
 
@@ -1421,7 +1401,6 @@ function move_messages_to_account(ids, folder_id) {
                 clear_reader();
                 remove_messages_locally(to_remove);
             }
-            build_move_options();
             load_accounts();
         });
     });
@@ -1495,25 +1474,9 @@ function move_messages(ids, folder_id) {
                 clear_reader();
                 remove_messages_locally(to_remove);
             }
-            build_move_options();
             load_accounts();
         });
     });
-}
-
-function move_selected() {
-    const select = document.getElementById("move_select");
-    const folder_id = select.value;
-    if (!folder_id) {
-        return;
-    }
-    const ids = selected_or_current_ids();
-    if (ids.length === 0) {
-        select.value = "";
-        return;
-    }
-    select.value = "";
-    move_messages(ids, folder_id);
 }
 
 function delete_messages(ids) {
@@ -1537,7 +1500,6 @@ function delete_messages(ids) {
         previous_state.set(String(message_id), state);
         mark_trashed_local(message_id);
     }
-    build_move_options();
 
     api.messages.batch_delete(ids, function(response) {
         if (!api_was_ok(response)) {
@@ -1549,7 +1511,6 @@ function delete_messages(ids) {
                 }
                 untrash_local(message_id, state.folder_id);
             }
-            build_move_options();
             show_api_error(response);
             return;
         }
@@ -1578,7 +1539,6 @@ function restore_messages(ids) {
                 message.local_deleted = false;
             }
         }
-        build_move_options();
         load_accounts();
         if (active_kind !== null) {
             load_messages(true);
@@ -1774,6 +1734,153 @@ function clear_drag_state() {
     drag_source_account_ids = new Set();
 }
 
+function account_row(element) {
+    if (!element || !element.closest) {
+        return null;
+    }
+    const header = element.closest(".account_header");
+    if (!header || header.dataset.allAccounts) {
+        return null;
+    }
+    return header.closest(".account");
+}
+
+function clear_account_drop_target() {
+    if (!accounts_element || account_drop_target === null) {
+        return;
+    }
+    for (const account_div of accounts_element.querySelectorAll(".account.drop_before, .account.drop_after")) {
+        account_div.classList.remove("drop_before", "drop_after");
+    }
+    account_drop_target = null;
+}
+
+function clear_account_drag_state() {
+    if (accounts_element) {
+        for (const account_div of accounts_element.querySelectorAll(".account.dragging")) {
+            account_div.classList.remove("dragging");
+        }
+    }
+    clear_account_drop_target();
+    drag_account_id = null;
+}
+
+function on_account_dragstart(event) {
+    const account_div = account_row(event.target);
+    if (!account_div || !event.dataTransfer) {
+        event.preventDefault();
+        return;
+    }
+    drag_account_id = String(account_div.dataset.accountId);
+    event.dataTransfer.effectAllowed = "move";
+    // Firefox only starts a drag when some data is set. The custom type lets
+    // the panel distinguish an account drag from a message drag.
+    event.dataTransfer.setData("application/x-bringmail-account", drag_account_id);
+    event.dataTransfer.setData("text/plain", drag_account_id);
+    account_div.classList.add("dragging");
+}
+
+function on_account_dragend(event) {
+    suppress_account_click_until = Date.now() + 200;
+    clear_account_drag_state();
+}
+
+function on_account_reorder_dragover(event) {
+    const account_div = account_row(event.target);
+    if (
+        !account_div ||
+        !event.dataTransfer ||
+        String(account_div.dataset.accountId) === drag_account_id
+    ) {
+        clear_account_drop_target();
+        return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+
+    const header = account_div.querySelector(".account_header");
+    const rect = header.getBoundingClientRect();
+    const before = event.clientY < (rect.top + (rect.height / 2));
+    if (account_drop_target === account_div && account_drop_before === before) {
+        return;
+    }
+    clear_account_drop_target();
+    account_drop_target = account_div;
+    account_drop_before = before;
+    account_div.classList.add(before ? "drop_before" : "drop_after");
+}
+
+function ordered_account_ids_after_drop(dragged_id, target_id, before) {
+    const account_ids = accounts_data.map(account => String(account.id));
+    const from_index = account_ids.indexOf(String(dragged_id));
+    if (from_index === -1) {
+        return null;
+    }
+    account_ids.splice(from_index, 1);
+    let to_index = account_ids.indexOf(String(target_id));
+    if (to_index === -1) {
+        return null;
+    }
+    if (!before) {
+        to_index += 1;
+    }
+    account_ids.splice(to_index, 0, String(dragged_id));
+    return account_ids;
+}
+
+function apply_account_order(account_ids) {
+    const by_id = new Map(accounts_data.map(account => [String(account.id), account]));
+    const ordered = [];
+    for (const account_id of account_ids) {
+        const account = by_id.get(String(account_id));
+        if (!account) {
+            return false;
+        }
+        ordered.push(account);
+    }
+    if (ordered.length !== accounts_data.length) {
+        return false;
+    }
+    accounts_data = ordered;
+    render_accounts();
+    return true;
+}
+
+function on_account_reorder_drop(event) {
+    const dragged_id = drag_account_id;
+    const target_div = account_drop_target;
+    const before = account_drop_before;
+    clear_account_drag_state();
+
+    if (
+        dragged_id === null ||
+        target_div === null ||
+        String(target_div.dataset.accountId) === dragged_id
+    ) {
+        return;
+    }
+    event.preventDefault();
+
+    const account_ids = ordered_account_ids_after_drop(
+        dragged_id,
+        target_div.dataset.accountId,
+        before
+    );
+    if (!account_ids || !apply_account_order(account_ids)) {
+        return;
+    }
+
+    api.accounts.reorder(account_ids, function(response) {
+        if (!api_was_ok(response)) {
+            show_api_error(response);
+            load_accounts();
+            return;
+        }
+        accounts_data = response.data;
+        render_accounts();
+    });
+}
+
 function on_messages_dragstart(event) {
     const row = event.target.closest(".message");
     if (!row || !event.dataTransfer) {
@@ -1867,6 +1974,33 @@ function on_folder_drop(event) {
         return;
     }
     move_messages(ids, folder.id);
+}
+
+function on_accounts_dragover(event) {
+    if (drag_account_id !== null) {
+        on_account_reorder_dragover(event);
+        return;
+    }
+    on_folder_dragover(event);
+}
+
+function on_accounts_dragleave(event) {
+    if (drag_account_id !== null) {
+        if (event.relatedTarget && accounts_element.contains(event.relatedTarget)) {
+            return;
+        }
+        clear_account_drop_target();
+        return;
+    }
+    on_folder_dragleave(event);
+}
+
+function on_accounts_drop(event) {
+    if (drag_account_id !== null) {
+        on_account_reorder_drop(event);
+        return;
+    }
+    on_folder_drop(event);
 }
 
 
@@ -2311,9 +2445,9 @@ function on_pageload() {
     messages_element.addEventListener("scroll", maybe_load_more_messages);
     messages_element.addEventListener("dragstart", on_messages_dragstart);
     messages_element.addEventListener("dragend", on_messages_dragend);
-    accounts_element.addEventListener("dragover", on_folder_dragover);
-    accounts_element.addEventListener("dragleave", on_folder_dragleave);
-    accounts_element.addEventListener("drop", on_folder_drop);
+    accounts_element.addEventListener("dragover", on_accounts_dragover);
+    accounts_element.addEventListener("dragleave", on_accounts_dragleave);
+    accounts_element.addEventListener("drop", on_accounts_drop);
 
     message_context_read_button.addEventListener("click", function() {
         contextmenus.hide_open_menus();
@@ -2337,7 +2471,6 @@ function on_pageload() {
     document.getElementById("mark_read_button").addEventListener("click", function() { mark_selected(true); });
     document.getElementById("mark_unread_button").addEventListener("click", function() { mark_selected(false); });
     document.getElementById("delete_button").addEventListener("click", delete_selected);
-    document.getElementById("move_select").addEventListener("change", move_selected);
 
     filter_input.addEventListener("input", function() {
         clearTimeout(dynamic_filter_timeout);

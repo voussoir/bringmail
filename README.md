@@ -59,6 +59,8 @@ Features
 - A bottom status bar reports active synchronization progress through SSE.
 - The account list shows `↑` for queued actions and `!` for actions that could
   not be synced. Right-click an account for Retry pending and Discard pending.
+- Drag an account header up or down to change the order of the accounts. The
+  order is stored in the database, so every browser session sees it.
 - The reader panel uses theme-aware dark colors; HTML email content keeps its
   own canvas for sender styling.
 - Message lists load 500 at a time and automatically fetch older messages when

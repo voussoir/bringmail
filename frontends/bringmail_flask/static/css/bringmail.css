@@ -192,6 +192,7 @@ body.layout_lmr #content_body
 
 #account_list .account
 {
+    position: relative;
     margin-bottom: 2px;
 }
 
@@ -203,7 +204,7 @@ body.layout_lmr #content_body
     grid-column-gap: 0.4em;
     align-items: center;
     padding: 1px 2px;
-    cursor: pointer;
+    cursor: default;
     user-select: none;
 }
 
@@ -248,6 +249,39 @@ body.layout_lmr #content_body
     background-color: var(--color_selection);
     outline: 1px dashed var(--color_text_link);
     outline-offset: -1px;
+    cursor: grabbing;
+}
+
+/* Dragging an account header reorders the tree. The insertion line is drawn on
+   the side of the hovered account that the pointer is closer to. The line is a
+   positioned pseudo-element so the account's hover background cannot hide it. */
+
+#account_list .account.dragging > .account_header
+{
+    opacity: 0.45;
+    cursor: grabbing;
+}
+
+#account_list .account.drop_before::before,
+#account_list .account.drop_after::after
+{
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: var(--color_text_link);
+    pointer-events: none;
+}
+
+#account_list .account.drop_before::before
+{
+    top: 0;
+}
+
+#account_list .account.drop_after::after
+{
+    bottom: 0;
 }
 
 #account_list .account.active > .account_header,
@@ -307,18 +341,14 @@ body.layout_lmr #content_body
     border-radius: 2px;
     background-color: var(--color_reader_bg_alt);
     line-height: 1.35em;
-    cursor: pointer;
+    cursor: default;
     user-select: none;
-}
-
-#message_list .message[draggable="true"]
-{
-    cursor: grab;
 }
 
 #message_list .message.dragging
 {
     opacity: 0.45;
+    cursor: grabbing;
 }
 
 #message_list .message:last-child
