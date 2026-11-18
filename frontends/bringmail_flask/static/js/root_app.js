@@ -179,7 +179,10 @@ function update_tab_title(total_unread) {
     document.title = count > 0 ? `${BASE_TAB_TITLE} (${count})` : BASE_TAB_TITLE;
 }
 
-function account_icon() {
+function account_icon(account) {
+    if (account && account.offline) {
+        return "💾";
+    }
     return "📮";
 }
 
@@ -275,7 +278,7 @@ function render_accounts() {
 
         const icon = document.createElement("span");
         icon.classList.add("icon");
-        icon.textContent = account_icon();
+        icon.textContent = account_icon(account);
         header.appendChild(icon);
 
         const title = document.createElement("span");
