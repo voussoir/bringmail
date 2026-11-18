@@ -172,7 +172,7 @@ class Migrator:
             create_sql,
             transfer_sql=None,
             expect_same_rowcount=True,
-    ):
+        ):
         '''
         Rebuild a table using SQLite's recommended create-copy-drop-rename
         procedure.
@@ -411,7 +411,7 @@ def upgrade_all(
         dry_run=False,
         backup=True,
         upgrades=None,
-) -> UpgradeReport:
+    ) -> UpgradeReport:
     '''
     Upgrade a database from its current version to target_version, which
     defaults to constants.DATABASE_VERSION.
