@@ -147,7 +147,6 @@ body.layout_lmr #content_body
 {
     display: inline-block;
     padding: 1px 6px;
-    border: 1px solid var(--color_text_normal);
     border-radius: 3px;
     text-decoration: none;
 }
@@ -330,8 +329,8 @@ body.layout_lmr #content_body
 {
     display: grid;
     grid-template:
-        "read from attachment pending date" auto
-        "subject subject subject subject subject" auto
+        "read subject subject attachment pending" auto
+        ".    from    from    from       date" auto
         / 1.2em minmax(0, 1fr) auto auto max-content;
     grid-column-gap: 0.5em;
     grid-row-gap: 1px;
@@ -454,9 +453,14 @@ body.layout_lmr #content_body
 {
     grid-area: date;
     text-align: right;
-    font-size: 90%;
     white-space: nowrap;
     padding-right: 2px;
+}
+
+#message_list .message .from,
+#message_list .message .date
+{
+    font-size: calc(1em - 2pt);
 }
 
 /* Reader *********************************************************************/
@@ -643,8 +647,8 @@ body.layout_lmr #content_body
     #message_list .message
     {
         grid-template:
-            "from pending date" auto
             "subject subject subject" auto
+            "from    pending date" auto
             / minmax(0, 1fr) auto max-content;
     }
 
