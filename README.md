@@ -65,6 +65,8 @@ Features
   own canvas for sender styling.
 - Message lists load 500 at a time and automatically fetch older messages when
   you scroll near the bottom.
+- The message list is grouped by calendar day, with a centered date separator
+  above the first message of each day.
 - Multiple themes.
 - User-selectable LTB and LMR layouts.
 

@@ -325,6 +325,19 @@ body.layout_lmr #content_body
 
 /* Message list ***************************************************************/
 
+/* Calendar-day separators. They deliberately have no background color of their
+   own, so the panel color shows through and the day boundary reads as a gap
+   between the message cards. */
+#message_list .date_header
+{
+    padding: 8px 0 4px;
+    text-align: center;
+    font-size: 85%;
+    font-weight: bold;
+    color: var(--color_reader_text_muted);
+    user-select: none;
+}
+
 #message_list .message
 {
     display: grid;

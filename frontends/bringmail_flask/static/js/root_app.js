@@ -693,6 +693,31 @@ function maybe_load_more_messages() {
     }
 }
 
+// Messages arrive newest first, so the messages of one calendar day are
+// contiguous. A separator is emitted only for the first message of each day.
+function message_day_key(message) {
+    if (message.date_unix === null || message.date_unix === undefined) {
+        return null;
+    }
+    const date = new Date(message.date_unix * 1000);
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function create_date_header(message) {
+    const header = document.createElement("div");
+    header.classList.add("date_header");
+    header.textContent = new Date(message.date_unix * 1000).toLocaleDateString(
+        undefined,
+        {
+            weekday: "short",
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+        }
+    );
+    return header;
+}
+
 function create_message_row(message) {
     const row = document.createElement("div");
     row.classList.add("message");
@@ -772,8 +797,21 @@ function render_messages(reset) {
         messages_rendered = 0;
     }
     const fragment = document.createDocumentFragment();
+    // When more messages are appended, the first new row must be compared
+    // against the last row that is already on screen so a day that straddles
+    // two pages does not get a second separator.
+    let previous_day = null;
+    if (messages_rendered > 0) {
+        previous_day = message_day_key(messages_data[messages_rendered - 1]);
+    }
     for (let index = messages_rendered; index < messages_data.length; index += 1) {
-        fragment.appendChild(create_message_row(messages_data[index]));
+        const message = messages_data[index];
+        const day = message_day_key(message);
+        if (day !== null && day !== previous_day) {
+            fragment.appendChild(create_date_header(message));
+        }
+        previous_day = day;
+        fragment.appendChild(create_message_row(message));
     }
     messages_element.appendChild(fragment);
     messages_rendered = messages_data.length;
@@ -992,6 +1030,45 @@ function apply_filter() {
         ].join(" ").toLocaleLowerCase();
         row.classList.toggle("hidden", searchterm !== "" && text.indexOf(searchterm) === -1);
     }
+    update_date_headers();
+}
+
+function update_date_headers() {
+    // A separator is shown only while at least one message below it and above
+    // the next separator is visible. A separator whose messages were all
+    // removed is dropped from the DOM instead of lingering unseen.
+    let header = null;
+    let has_rows = false;
+    let has_visible_rows = false;
+
+    function finish_group() {
+        if (header === null) {
+            return;
+        }
+        if (!has_rows) {
+            header.remove();
+        } else {
+            header.classList.toggle("hidden", !has_visible_rows);
+        }
+    }
+
+    for (const child of Array.from(messages_element.children)) {
+        if (child.classList.contains("date_header")) {
+            finish_group();
+            header = child;
+            has_rows = false;
+            has_visible_rows = false;
+            continue;
+        }
+        if (!child.classList.contains("message")) {
+            continue;
+        }
+        has_rows = true;
+        if (!child.classList.contains("hidden")) {
+            has_visible_rows = true;
+        }
+    }
+    finish_group();
 }
 
 function select_all_visible() {
