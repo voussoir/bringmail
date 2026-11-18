@@ -9,6 +9,10 @@ const BLOCKED_IMAGE = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
 
 const MESSAGE_PAGE_SIZE = 500;
 
+// Browser tab title when every account is read; when any account has unread
+// messages the total across all accounts is appended in parentheses.
+const BASE_TAB_TITLE = "BringMail";
+
 // Clicking the already-selected account or folder reloads the message list,
 // but a rapid second click (for example the second half of a double-click)
 // must not trigger a second request.
@@ -157,6 +161,11 @@ function set_unread_span(element, count) {
     } else {
         element.classList.remove("hidden");
     }
+}
+
+function update_tab_title(total_unread) {
+    const count = Math.max(0, total_unread || 0);
+    document.title = count > 0 ? `${BASE_TAB_TITLE} (${count})` : BASE_TAB_TITLE;
 }
 
 function account_icon() {
@@ -415,6 +424,7 @@ function update_unread_displays() {
     }
     const all_span = accounts_element.querySelector("[data-all-accounts-unread]");
     set_unread_span(all_span, total_unread);
+    update_tab_title(total_unread);
 }
 
 function folder_in_account_view(folder, account) {

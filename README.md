@@ -38,6 +38,8 @@ Features
   in the local database and replayed when the connection returns; see
   "Offline actions" below.
 - Clicking a message's read/unread dot toggles that message without opening it.
+- The browser tab title shows the total unread count across all accounts, for
+  example `BringMail (5)`. It reverts to `BringMail` when nothing is unread.
 - Right-clicking a message offers Mark as read, Mark as unread, Delete, Move to
   folder, and Undo delete for a pending or flushed delete.
 - The reader opens in plaintext mode by default; HTML remains one click away.
