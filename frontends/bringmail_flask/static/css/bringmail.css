@@ -128,6 +128,17 @@ body.layout_lmr #content_body
     min-height: 0;
 }
 
+/* Without this hint the browser keeps the message list's scrolling contents on
+   the main thread, so every wheel detent needs a fresh main-thread frame before
+   anything on screen moves. The scrollbar thumb is drawn from the scroll offset
+   instead, which makes it lead the content by a step or more. Declaring that
+   this scroller's offset will change lets the engine clear the way for it, and
+   the content then moves with the offset as the user scrolls. */
+#message_list
+{
+    will-change: scroll-position;
+}
+
 #accounts_toolbar,
 #messages_toolbar
 {
