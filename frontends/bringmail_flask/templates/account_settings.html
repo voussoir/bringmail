@@ -164,10 +164,7 @@ pre.error_details
             </div>
             {% endif %}
             <div><label>Username</label><input type="text" id="username_input" autocomplete="username" value="{{account.username if account else ''}}"/></div>
-            <div>
-                <label>Password</label>
-                <input type="password" id="password_input" autocomplete="current-password" placeholder="{% if account %}Leave blank to keep the current password{% else %}Password{% endif %}"/>
-            </div>
+            <div><label>Password</label><input type="password" id="password_input" autocomplete="current-password" placeholder="{% if account %}Leave blank to keep the current password{% else %}Password{% endif %}"/></div>
             <p>Passwords are stored in the local BringMail SQLite database. Use a dedicated application password where your mail provider supports them.</p>
         </div>
         {% else %}
