@@ -34,6 +34,10 @@ Features
   usable while bodies fill in newest-first.
 - Read/unread, move to folder, and delete to Trash. Flag state is synchronized
   and retained in the backend, but the web UI does not expose flag controls.
+- Drag messages onto a folder in another account to transfer them. BringMail
+  copies the cached raw message with IMAP APPEND and moves the source to Trash
+  only after the copy succeeds. If the source account has no selectable Trash,
+  the transfer becomes a copy and the source message remains.
 - Offline queueing of read/unread, move, delete, and undo. Actions are recorded
   in the local database and replayed when the connection returns; see
   "Offline actions" below.
@@ -41,7 +45,9 @@ Features
 - The browser tab title shows the total unread count across all accounts, for
   example `BringMail (5)`. It reverts to `BringMail` when nothing is unread.
 - Right-clicking a message offers Mark as read, Mark as unread, Delete, Move to
-  folder, and Undo delete for a pending or flushed delete.
+  folder, and Undo delete for a pending or flushed delete. A single-account
+  selection can move to any account's folder; selections spanning source
+  accounts remain blocked.
 - The reader opens in plaintext mode by default; HTML remains one click away.
   HTML mail is sanitized server-side and rendered inside a sandboxed iframe.
   Remote images are blocked until you click "Load images"; inline `cid:` images
@@ -188,8 +194,8 @@ Offline actions
 Reading the cache works offline. Write actions are queued and replayed by the
 same background worker that performs refreshes.
 
-- Mark read/unread, move, and delete are applied to the local database
-  immediately and recorded in `pending_operations`.
+- Mark read/unread, same-account move, and delete are applied to the local
+  database immediately and recorded in `pending_operations`.
 - When a connection is available, the queue is flushed one account at a time.
   The affected folders are synchronized first, so the flush knows the current
   server state before writing.
@@ -203,6 +209,16 @@ same background worker that performs refreshes.
   sent. If the message moved or vanished while BringMail was offline, the
   queued action is marked conflicted and the local row is left to the next
   refresh.
+- **Cross-account transfers** are queued as `move_account` or `copy_account`.
+  The flush opens a second authenticated connection, appends the cached raw
+  message to the destination folder, and only then moves the source to the
+  source account's Trash. If the source account has no usable Trash folder,
+  the operation is copy-only and the source remains. A retry after a lost
+  APPEND response searches the destination by Message-ID and size so it does
+  not append a second copy. The destination folder is synchronized after a
+  successful copy. Discarding a cross-account cleanup after the APPEND has
+  already succeeded leaves the destination copy and the source message in
+  place.
 - **Inverse actions cancel**: queuing a read and then an unread returns to the
   original state and sends nothing. Delete followed by Undo, or a move followed
   by a move back, cancels the pair as long as neither has reached the server.
@@ -252,8 +268,9 @@ Tests
 The tests cover message parsing, generated-column queries, local flags,
 pagination, incremental and targeted fake-IMAP sync, UIDVALIDITY resets,
 reusable IMAP sessions, IMAP IDLE sessions and watchers, the offline pending
-queue (consolidation, conditional flag writes, conflicts, backoff), database
-schema upgrades, and the Flask routes. They do not contact a real mail server.
+queue (consolidation, conditional flag writes, conflicts, backoff), cross-account
+APPEND transfers and copy-only fallbacks, database schema upgrades, and the Flask
+routes. They do not contact a real mail server.
 
 Architecture
 ------------

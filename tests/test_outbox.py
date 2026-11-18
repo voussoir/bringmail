@@ -196,6 +196,52 @@ class ConsolidationTest(unittest.TestCase):
         self.assertEqual(execute, [2, 1])
         self.assertEqual(superseded, set())
 
+    def test_cross_account_operations_are_not_folded_into_move_chain(self):
+        rows = [
+            make_row(
+                1,
+                operation=constants.OPERATION_MOVE_ACCOUNT,
+                base_folder_id=10,
+                target_folder_id=30,
+            ),
+            make_row(
+                2,
+                operation=constants.OPERATION_MOVE,
+                base_folder_id=10,
+                target_folder_id=20,
+            ),
+        ]
+        (execute, superseded) = self.execute_ids(rows)
+        self.assertEqual(execute, [1, 2])
+        self.assertEqual(superseded, set())
+
+    def test_virtual_folder_ignores_cross_account_operations(self):
+        operations = [
+            outbox.Operation.from_row(make_row(
+                1,
+                operation=constants.OPERATION_MOVE_ACCOUNT,
+                base_folder_id=10,
+                target_folder_id=30,
+            )),
+            outbox.Operation.from_row(make_row(
+                2,
+                operation=constants.OPERATION_MOVE,
+                base_folder_id=10,
+                target_folder_id=20,
+            )),
+        ]
+        self.assertEqual(outbox.virtual_folder_id(10, operations), 20)
+
+    def test_describe_cross_account_operations(self):
+        self.assertEqual(
+            outbox.describe(constants.OPERATION_COPY_ACCOUNT),
+            'Copied to another account',
+        )
+        self.assertEqual(
+            outbox.describe(constants.OPERATION_MOVE_ACCOUNT),
+            'Moved to another account',
+        )
+
     def test_virtual_folder_id_tracks_chained_folder_operations(self):
         operations = [
             outbox.Operation.from_row(make_row(

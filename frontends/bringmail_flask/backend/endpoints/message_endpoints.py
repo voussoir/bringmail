@@ -153,6 +153,49 @@ def post_batch_messages_move():
     return _queue_batch(messages, lambda message: message.queue_move(folder))
 
 
+@site.route('/batch/messages/move_to_account', methods=['POST'])
+@flasktools.required_fields(['message_ids', 'folder_id'])
+def post_batch_messages_move_to_account():
+    message_ids = _parse_message_ids()
+    folder = common.get_folder(request.form['folder_id'], response_type='json')
+    messages = list(common.get_messages(message_ids, response_type='json'))
+    if not messages:
+        return flasktools.json_response(
+            {
+                'type': 'error',
+                'error_type': 'INVALID_INPUT',
+                'error_message': 'No messages were selected.',
+            },
+            status=400,
+        )
+
+    source_account_ids = {message.account_id for message in messages}
+    if len(source_account_ids) != 1:
+        raise bringmail.exceptions.InvalidFolder(
+            'Move requires messages from one account.'
+        )
+    if folder.account_id == messages[0].account_id:
+        raise bringmail.exceptions.InvalidFolder(
+            'The destination folder belongs to the source account.'
+        )
+
+    entries = []
+    for message in messages:
+        result = message.queue_move_to_account(folder)
+        entries.append({
+            'id': message.id,
+            'copy_only': result.copy_only,
+            'pending': common.pending_state_for(message),
+        })
+
+    common.add_flush_to_queue(messages[0].account)
+    return flasktools.json_response({
+        'type': 'batch_move_to_account',
+        'folder_id': folder.id,
+        'messages': entries,
+    })
+
+
 @site.route('/batch/messages/delete', methods=['POST'])
 @flasktools.required_fields(['message_ids'])
 def post_batch_messages_delete():

@@ -474,6 +474,137 @@ class FlaskTest(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data[0]['pending_count'], 1)
 
+    def _add_source_trash(self):
+        with self.db.transaction:
+            return self.db.add_folder(
+                account=self.account,
+                name='Trash',
+                display_name='Trash',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_TRASH,
+            )
+
+    def _add_destination_account(self, *, create_message=False):
+        with self.db.transaction:
+            account = self.db.add_account(
+                label='Destination',
+                host='imap.example.com',
+                port=993,
+                ssl=True,
+                starttls=False,
+                username='destination@example.com',
+                password='hunter2',
+                autorefresh_interval=900,
+            )
+            folder = self.db.add_folder(
+                account=account,
+                name='DestInbox',
+                display_name='Dest Inbox',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_INBOX,
+            )
+            message = None
+            if create_message:
+                (parsed, meta) = helpers.parse_full_message(
+                    self.raw,
+                    size=len(self.raw),
+                )
+                message = self.db.add_message(
+                    account=account,
+                    folder=folder,
+                    uid=1,
+                    uidvalidity=1,
+                    raw=self.raw,
+                    meta=meta,
+                    size=len(self.raw),
+                )
+        return (account, folder, message)
+
+    def test_cross_account_move_without_source_trash_is_copy_only(self):
+        common.clear_refresh_queue()
+        (destination_account, destination_folder, _) = self._add_destination_account()
+
+        response = self.client.post(
+            '/batch/messages/move_to_account',
+            data={
+                'message_ids': str(self.message.id),
+                'folder_id': str(destination_folder.id),
+            },
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['type'], 'batch_move_to_account')
+        self.assertEqual(len(data['messages']), 1)
+        entry = data['messages'][0]
+        self.assertTrue(entry['copy_only'])
+        self.assertEqual(entry['pending']['operation'], constants.OPERATION_COPY_ACCOUNT)
+
+        rows = self.db.get_pending_for_message(self.message.id)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].operation, constants.OPERATION_COPY_ACCOUNT)
+        self.assertEqual(rows[0].target_folder_id, destination_folder.id)
+
+        jobs = []
+        while not common.REFRESH_QUEUE.empty():
+            jobs.append(common.REFRESH_QUEUE.get_nowait()[2])
+        self.assertTrue(any(
+            isinstance(job, common.FlushJob) and job.account_id == self.account.id
+            for job in jobs
+        ))
+
+    def test_cross_account_move_with_source_trash_is_move(self):
+        self._add_source_trash()
+        (destination_account, destination_folder, _) = self._add_destination_account()
+
+        response = self.client.post(
+            '/batch/messages/move_to_account',
+            data={
+                'message_ids': str(self.message.id),
+                'folder_id': str(destination_folder.id),
+            },
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        entry = data['messages'][0]
+        self.assertFalse(entry['copy_only'])
+        self.assertEqual(entry['pending']['operation'], constants.OPERATION_MOVE_ACCOUNT)
+
+        row = self.db.get_pending_for_message(self.message.id)[0]
+        self.assertEqual(row.operation, constants.OPERATION_MOVE_ACCOUNT)
+
+    def test_cross_account_move_rejects_mixed_source_accounts(self):
+        (destination_account, destination_folder, other_message) = (
+            self._add_destination_account(create_message=True)
+        )
+
+        response = self.client.post(
+            '/batch/messages/move_to_account',
+            data={
+                'message_ids': f'{self.message.id},{other_message.id}',
+                'folder_id': str(destination_folder.id),
+            },
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+        data = response.get_json()
+        self.assertEqual(data['error_type'], 'INVALID_FOLDER')
+        self.assertIn('one account', data['error_message'])
+
+    def test_cross_account_move_rejects_same_account_destination(self):
+        response = self.client.post(
+            '/batch/messages/move_to_account',
+            data={
+                'message_ids': str(self.message.id),
+                'folder_id': str(self.folder.id),
+            },
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+        data = response.get_json()
+        self.assertEqual(data['error_type'], 'INVALID_FOLDER')
+
 
 if __name__ == '__main__':
     unittest.main()

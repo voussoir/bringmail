@@ -1,3 +1,4 @@
+import datetime
 import json
 import random
 import sqlite3
@@ -1391,6 +1392,42 @@ class BDBPendingMixin:
         )
 
 
+def _outbox_message_flags(message):
+    '''
+    Flags to carry across an account boundary. \Deleted is deliberately not
+    copied because the destination copy is a new live message.
+    '''
+    flags = [
+        flag.decode('ascii')
+        for flag in helpers.booleans_to_flags(
+            seen=message.seen,
+            flagged=message.flagged,
+            answered=message.answered,
+            draft=message.draft,
+        )
+    ]
+    for keyword in message.keywords or []:
+        keyword = str(keyword)
+        if keyword:
+            flags.append(keyword)
+    return flags
+
+
+def _outbox_message_time(message):
+    '''
+    The source INTERNALDATE as a UTC datetime, falling back to the Date header.
+    '''
+    value = message.meta.get('internaldate_unix')
+    if value is None:
+        value = message.meta.get('date_unix')
+    if value is None:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(int(value), datetime.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 class BDBOutboxMixin:
     '''
     Flush the pending queue against the mail server.
@@ -1602,6 +1639,7 @@ class BDBOutboxMixin:
             'pending': 0,
             'not_due': 0,
             'error': None,
+            'refresh_folder_ids': [],
         }
 
         rows = self.get_pending_operations(
@@ -1689,9 +1727,12 @@ class BDBOutboxMixin:
                         )
                 summary['superseded'] = len(plan.superseded)
 
+            self._outbox_refresh_folder_ids = set()
             for (index, operation) in enumerate(plan.execute):
                 try:
-                    self._outbox_execute(client, operation)
+                    refresh_folder_id = self._outbox_execute(client, operation)
+                    if refresh_folder_id is not None:
+                        self._outbox_refresh_folder_ids.add(refresh_folder_id)
                 except exceptions.PendingConflict as exc:
                     log.info('Pending operation %s became a conflict: %s', operation, exc)
                     self._outbox_revert_local(operation)
@@ -1738,6 +1779,9 @@ class BDBOutboxMixin:
             except Exception:
                 pass
 
+        summary['refresh_folder_ids'] = sorted(
+            getattr(self, '_outbox_refresh_folder_ids', set())
+        )
         summary.update(self._outbox_summary(account))
         self._outbox_progress(
             progress,
@@ -1803,8 +1847,8 @@ class BDBOutboxMixin:
 
         if operation.is_flag:
             self._outbox_execute_flag(client, operation)
-        else:
-            self._outbox_execute_folder(client, operation)
+            return None
+        return self._outbox_execute_folder(client, operation)
 
     def _outbox_flag_changes(self, operation, message):
         '''
@@ -1947,7 +1991,7 @@ class BDBOutboxMixin:
             if operation.operation == constants.OPERATION_DELETE:
                 # The message is already gone; the delete is satisfied.
                 self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
-                return
+                return None
             raise exceptions.PendingConflict('The message no longer exists locally.')
 
         try:
@@ -1968,7 +2012,7 @@ class BDBOutboxMixin:
                 )
             message.local_deleted = False
             self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
-            return
+            return None
 
         selected = client.select_folder(source.name, readonly=False)
         server_uidvalidity = selected.get(b'UIDVALIDITY') if isinstance(selected, dict) else None
@@ -1987,12 +2031,21 @@ class BDBOutboxMixin:
                     self.delete(table=objects.Message, pairs={'id': message.id})
                 self.caches[objects.Message].clear()
                 self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
-                return
+                return None
             with self.transaction:
                 self.delete(table=objects.Message, pairs={'id': message.id})
             self.caches[objects.Message].clear()
             raise exceptions.PendingConflict(
                 'The message no longer exists in the source folder.'
+            )
+
+        if operation.is_cross_account:
+            return self._outbox_execute_cross_account(
+                client,
+                operation,
+                message,
+                source,
+                target,
             )
 
         (new_uid, new_uidvalidity, uid_source) = objects.move_message_on_server(
@@ -2030,6 +2083,172 @@ class BDBOutboxMixin:
                 self.delete(table=objects.Message, pairs={'id': message.id})
         self.caches[objects.Message].clear()
         self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+        return None
+
+    def _outbox_destination_has_copy(self, client, target, message):
+        '''
+        Best-effort guard against APPENDing the same message twice on retry.
+        A matching size is enough evidence for a copy that already reached the
+        destination; the operation can continue with source cleanup.
+        '''
+        if not message.message_id:
+            return False
+
+        try:
+            found = client.search(['HEADER', 'Message-ID', message.message_id])
+        except Exception:
+            log.debug(
+                'Could not search "%s" for a previous copy of message %s.',
+                target.name,
+                message.id,
+                exc_info=True,
+            )
+            return False
+        if not found:
+            return False
+        if message.size is None:
+            return True
+
+        try:
+            response = client.fetch(found, ['RFC822.SIZE'])
+        except Exception:
+            log.debug(
+                'Could not fetch sizes for duplicate check in "%s".',
+                target.name,
+                exc_info=True,
+            )
+            return True
+
+        for data in response.values():
+            size = helpers.maybe_int(data.get(b'RFC822.SIZE'))
+            if size is not None and int(size) == int(message.size):
+                return True
+        return False
+
+    def _outbox_execute_cross_account(self, client, operation, message, source, target):
+        '''
+        Copy one message to a folder in another account and, when requested,
+        move the source to Trash afterwards.
+
+        The source is never touched before APPEND succeeds. If cleanup fails
+        after a successful APPEND, the operation stays pending and a retry
+        first looks for the destination copy so it does not append again.
+        '''
+        try:
+            destination_account = target.account
+        except exceptions.NoSuchAccount as exc:
+            raise exceptions.PendingConflict(
+                'The destination account no longer exists.'
+            ) from exc
+        if destination_account.id == message.account_id:
+            raise exceptions.PendingConflict(
+                'The destination folder belongs to the source account.'
+            )
+
+        copy_only = operation.operation == constants.OPERATION_COPY_ACCOUNT
+        trash = None
+        if not copy_only:
+            try:
+                trash = message.account.get_trash_folder()
+            except exceptions.NoSuchAccount as exc:
+                raise exceptions.PendingConflict(
+                    'The source account no longer exists.'
+                ) from exc
+            if trash is None or not trash.is_selectable or trash.id == source.id:
+                copy_only = True
+
+        raw = self.decompress_raw(message.raw, message.raw_codec)
+        if raw is None:
+            raise exceptions.PendingConflict(
+                'The message body has not been downloaded yet. '
+                'Refresh the source folder and retry.'
+            )
+
+        flags = _outbox_message_flags(message)
+        msg_time = _outbox_message_time(message)
+
+        def destination_operation(destination_client):
+            destination_client.select_folder(target.name, readonly=False)
+            if self._outbox_destination_has_copy(destination_client, target, message):
+                log.info(
+                    'Destination "%s" already contains message %s; '
+                    'skipping APPEND.',
+                    target.name,
+                    message.id,
+                )
+                return
+            destination_client.append(
+                target.name,
+                raw,
+                flags=flags,
+                msg_time=msg_time,
+            )
+
+        try:
+            helpers.imap_call(destination_account, destination_operation)
+        except (exceptions.MailServerConnectionError,
+                exceptions.MailServerLoginError) as exc:
+            raise RuntimeError(
+                f'Could not connect to the destination account: {exc}'
+            ) from exc
+
+        refresh_folder_ids = getattr(self, '_outbox_refresh_folder_ids', None)
+        if refresh_folder_ids is not None:
+            refresh_folder_ids.add(target.id)
+
+        if copy_only or trash is None or trash.id == source.id:
+            if operation.operation == constants.OPERATION_MOVE_ACCOUNT:
+                log.warning(
+                    'Message %s was copied to another account, but the source '
+                    'account has no usable Trash folder; the source was kept.',
+                    message.id,
+                )
+            self._outbox_mark(operation.id, constants.PENDING_STATE_SENT)
+            return target.id
+
+        try:
+            (new_uid, new_uidvalidity, _uid_source) = objects.move_message_on_server(
+                client,
+                source_name=source.name,
+                destination_name=trash.name,
+                uid=message.uid,
+                message_id=message.message_id,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                'The destination copy succeeded, but moving the source '
+                f'message to Trash failed: {exc}'
+            ) from exc
+
+        with self.transaction:
+            if new_uid is not None:
+                self.update(
+                    table=objects.Message,
+                    pairs={
+                        'id': message.id,
+                        'folder_id': trash.id,
+                        'uid': new_uid,
+                        'uidvalidity': new_uidvalidity,
+                        'local_deleted': False,
+                    },
+                    where_key='id',
+                )
+                message.folder_id = trash.id
+                message.uid = new_uid
+                message.uidvalidity = new_uidvalidity
+                message.local_deleted = False
+                message._folder = trash
+            else:
+                log.warning(
+                    'Could not determine the Trash UID for message %s; '
+                    'removing the local row. The next sync will re-download it.',
+                    message.id,
+                )
+                self.delete(table=objects.Message, pairs={'id': message.id})
+            self.set_pending_state(operation.id, constants.PENDING_STATE_SENT)
+
+        self.caches[objects.Message].clear()
+        return target.id
 
 
 class BringMailDB(

@@ -508,6 +508,15 @@ def _flush_account(account):
         )
 
     summary = bringdb.flush_pending(account, progress=progress)
+    for folder_id in summary.get('refresh_folder_ids', []):
+        try:
+            add_folder_to_refresh_queue(folder_id)
+        except Exception:
+            log.debug(
+                'Could not queue a destination refresh for folder %s.',
+                folder_id,
+                exc_info=True,
+            )
     flasktools.send_sse(
         event='outbox_finished',
         data=json.dumps(summary),

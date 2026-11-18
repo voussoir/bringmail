@@ -145,6 +145,14 @@ api.messages.batch_move = function(message_ids, folder_id, callback) {
     });
 };
 
+api.messages.batch_move_to_account = function(message_ids, folder_id, callback) {
+    return http.post({
+        url: "/batch/messages/move_to_account",
+        data: {"message_ids": message_ids.join(","), "folder_id": folder_id},
+        callback: callback,
+    });
+};
+
 api.messages.batch_delete = function(message_ids, callback) {
     return http.post({
         url: "/batch/messages/delete",

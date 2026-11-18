@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import json
 import math
@@ -499,6 +500,16 @@ class Folder(ObjectBase):
         self.sync_enabled = sync_enabled
 
 
+@dataclasses.dataclass(frozen=True)
+class MoveToAccountResult:
+    '''
+    The outcome of queuing a cross-account transfer for one message.
+    '''
+    queued: bool
+    copy_only: bool
+    operation: str
+
+
 class Message(ObjectBase):
     table = 'messages'
     no_such_exception = exceptions.NoSuchMessage
@@ -782,15 +793,19 @@ class Message(ObjectBase):
         Queue a move without touching the server or the local folder. The
         row keeps its current UID until the flush learns the destination UID
         from COPYUID (or a Message-ID search).
+
+        A destination in another account becomes a cross-account transfer:
+        the message is copied with APPEND and then the source is moved to
+        Trash when that is possible.
         '''
         self.assert_not_deleted()
         if not isinstance(folder, Folder):
             raise TypeError(folder)
         folder.assert_not_deleted()
-        if folder.account_id != self.account_id:
-            raise exceptions.InvalidFolder('Cannot move a message to another account.')
         if not folder.is_selectable:
             raise exceptions.FolderNotSelectable(folder.name)
+        if folder.account_id != self.account_id:
+            return self.queue_move_to_account(folder).queued
 
         base_folder_id = self._virtual_folder_id()
         if folder.id == base_folder_id:
@@ -809,6 +824,71 @@ class Message(ObjectBase):
                 base_modseq=self.modseq,
             )
         return True
+
+    def queue_move_to_account(self, folder):
+        '''
+        Queue a transfer to a folder in another account.
+
+        The source is not changed locally at enqueue time. The flush copies
+        the raw message with APPEND and only then moves the source to Trash.
+        When the source account has no usable Trash folder, the operation is
+        copy-only and the source is left in place.
+        '''
+        self.assert_not_deleted()
+        if not isinstance(folder, Folder):
+            raise TypeError(folder)
+        folder.assert_not_deleted()
+        if not folder.is_selectable:
+            raise exceptions.FolderNotSelectable(folder.name)
+
+        if folder.account_id == self.account_id:
+            queued = self.queue_move(folder)
+            return MoveToAccountResult(
+                queued=queued,
+                copy_only=False,
+                operation=constants.OPERATION_MOVE,
+            )
+
+        source = self.folder
+        if not source.is_selectable:
+            raise exceptions.FolderNotSelectable(source.name)
+
+        pending = self._pending_folder_operations()
+        if any(operation.is_cross_account for operation in pending):
+            raise exceptions.InvalidFolder(
+                'A cross-account transfer is already queued for this message.'
+            )
+
+        base_folder_id = self._virtual_folder_id()
+        trash = self.account.get_trash_folder()
+        copy_only = (
+            trash is None or
+            not trash.is_selectable or
+            base_folder_id == trash.id
+        )
+        operation_kind = (
+            constants.OPERATION_COPY_ACCOUNT
+            if copy_only
+            else constants.OPERATION_MOVE_ACCOUNT
+        )
+
+        snapshot = self._flag_snapshot()
+        with self.bringmaildb.transaction:
+            self.bringmaildb.add_pending_operation(
+                account=self.account,
+                folder=source,
+                operation=operation_kind,
+                message=self,
+                base_folder_id=base_folder_id,
+                target_folder_id=folder.id,
+                observed=snapshot,
+                base_modseq=self.modseq,
+            )
+        return MoveToAccountResult(
+            queued=True,
+            copy_only=copy_only,
+            operation=operation_kind,
+        )
 
     def queue_delete(self):
         '''

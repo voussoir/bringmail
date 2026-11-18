@@ -125,6 +125,10 @@ class Operation:
         return self.operation in constants.OPERATION_FOLDER_KINDS
 
     @property
+    def is_cross_account(self):
+        return self.operation in constants.OPERATION_CROSS_ACCOUNT_KINDS
+
+    @property
     def is_private_flag(self):
         return self.operation in constants.OPERATION_PRIVATE_FLAGS
 
@@ -177,6 +181,10 @@ def describe(operation, enabled=None):
         return 'Deleted'
     if operation == constants.OPERATION_RESTORE:
         return 'Restored'
+    if operation == constants.OPERATION_COPY_ACCOUNT:
+        return 'Copied to another account'
+    if operation == constants.OPERATION_MOVE_ACCOUNT:
+        return 'Moved to another account'
     return operation
 
 
@@ -241,15 +249,24 @@ def _consolidate_folders(group):
     '''
     Return (to_execute, superseded_ids) for the folder operations in one group.
 
-    The chain is simulated from the first operation's base folder. Deletions
-    and restores participate because delete is a move to Trash and restore is
-    a move back. A move followed by its inverse is cancelled while the first
-    one is still unsent; anything longer is kept in order.
+    The same-account chain is simulated from the first operation's base folder.
+    Deletions and restores participate because delete is a move to Trash and
+    restore is a move back. A move followed by its inverse is cancelled while
+    the first one is still unsent; anything longer is kept in order.
+
+    Cross-account operations are opaque to the same-account chain: they do not
+    change the local source folder until they are flushed, and they have no
+    inverse operation. They are kept and executed in id order with the rest of
+    the folder operations.
     '''
-    folder_ops = [operation for operation in group if operation.is_folder]
+    cross_ops = [operation for operation in group if operation.is_cross_account]
+    folder_ops = [
+        operation for operation in group
+        if operation.is_folder and not operation.is_cross_account
+    ]
     folder_ops.sort(key=lambda operation: operation.id)
     if not folder_ops:
-        return ([], [])
+        return (cross_ops, [])
 
     simulated_folder = folder_ops[0].base_folder_id
     accepted = []
@@ -285,7 +302,7 @@ def _consolidate_folders(group):
         accepted.append(operation)
         simulated_folder = destination
 
-    return (accepted, superseded)
+    return (accepted + cross_ops, superseded)
 
 
 def consolidate(operations):
@@ -408,13 +425,15 @@ def virtual_folder_id(current_folder_id, operations):
     operation has been applied.
 
     The local row keeps its current folder while a delete is only queued, so
-    the enqueue code needs this to chain a restore or a second move.
+    the enqueue code needs this to chain a restore or a second move. Cross-
+    account operations are ignored because the source folder is not changed
+    until their flush.
     '''
     folder_id = current_folder_id
     for operation in operations:
         if not isinstance(operation, Operation):
             operation = Operation.from_row(operation)
-        if not operation.is_folder:
+        if not operation.is_folder or operation.is_cross_account:
             continue
         if operation.base_folder_id is not None and operation.base_folder_id != folder_id:
             folder_id = operation.base_folder_id

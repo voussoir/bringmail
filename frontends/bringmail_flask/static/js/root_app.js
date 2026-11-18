@@ -57,6 +57,9 @@ let message_context_restore_button = null;
 let message_context_move_list = null;
 let message_context_ids = [];
 
+let drag_message_ids = [];
+let drag_source_account_ids = new Set();
+
 let accounts_data = [];
 let active_kind = null;
 let active_id = null;
@@ -715,7 +718,9 @@ function create_message_row(message) {
     row.classList.add("message");
     row.dataset.id = message.id;
     row.dataset.folderId = message.folder_id;
+    row.dataset.accountId = message.account_id;
     row.dataset.date = message.date_unix;
+    row.draggable = true;
     if (!message.seen) {
         row.classList.add("unread");
     }
@@ -956,6 +961,39 @@ function untrash_local(message_id, folder_id) {
     const row = message_row(message_id);
     if (row) {
         row.classList.remove("trashed");
+    }
+}
+
+function set_message_pending_local(message_id, pending) {
+    message_id = String(message_id);
+    const message = find_message(message_id);
+    if (message) {
+        message.pending = pending || null;
+    }
+    const row = message_row(message_id);
+    if (!row) {
+        return;
+    }
+    const badge = row.querySelector(".pending_badge");
+    if (!pending) {
+        row.classList.remove("pending", "pending_conflict");
+        if (badge) {
+            badge.textContent = "";
+            badge.title = "";
+        }
+        return;
+    }
+    const conflicted = (
+        pending.state === "conflicted" ||
+        pending.state === "failed"
+    );
+    row.classList.add("pending");
+    row.classList.toggle("pending_conflict", conflicted);
+    if (badge) {
+        badge.textContent = conflicted ? "!" : "↑";
+        badge.title = conflicted
+            ? `${pending.label || "Action"} could not be synced (${pending.state}).`
+            : `${pending.label || "Action"} waiting to sync.`;
     }
 }
 
@@ -1363,18 +1401,64 @@ function remove_messages_locally(message_ids) {
     }
 }
 
+function move_messages_to_account(ids, folder_id) {
+    api.messages.batch_move_to_account(ids, folder_id, function(response) {
+        batch_result_handler(response, function(data) {
+            const entries = (data && data.messages) ? data.messages : [];
+            const to_remove = [];
+            for (const entry of entries) {
+                const message_id = String(entry.id);
+                if (entry.copy_only) {
+                    // The source has no usable Trash folder, or the message is
+                    // already in Trash. The copy is queued but the source row
+                    // must stay where it is.
+                    set_message_pending_local(message_id, entry.pending);
+                } else {
+                    to_remove.push(message_id);
+                }
+            }
+            if (to_remove.length) {
+                clear_reader();
+                remove_messages_locally(to_remove);
+            }
+            build_move_options();
+            load_accounts();
+        });
+    });
+}
+
 function move_messages(ids, folder_id) {
     if (!folder_id || !ids || ids.length === 0) {
+        return;
+    }
+
+    const target_folder = find_folder(folder_id);
+    if (!target_folder) {
+        return;
+    }
+    const messages = ids.map(find_message).filter(Boolean);
+    if (messages.length === 0) {
+        return;
+    }
+    const source_account_ids = new Set(
+        messages.map(message => String(message.account_id))
+    );
+    const cross_account = Array.from(source_account_ids).some(
+        account_id => account_id !== String(target_folder.account_id)
+    );
+    if (cross_account) {
+        if (source_account_ids.size !== 1) {
+            alert("Move requires messages from one account.");
+            return;
+        }
+        move_messages_to_account(ids, folder_id);
         return;
     }
 
     const previously_trashed = new Set(
         ids.map(String).filter(message_id => trashed_ids.has(String(message_id)))
     );
-    const target_folder = find_folder(folder_id);
-    const target_is_trash = Boolean(
-        target_folder && target_folder.special_use === "\\Trash"
-    );
+    const target_is_trash = target_folder.special_use === "\\Trash";
     const target_is_active = (
         active_kind === "folder" &&
         String(folder_id) === String(active_folder_id)
@@ -1384,6 +1468,16 @@ function move_messages(ids, folder_id) {
         batch_result_handler(response, function(returned_ids) {
             const to_remove = [];
             for (const message_id of returned_ids) {
+                const message = find_message(message_id);
+                if (
+                    message &&
+                    String(message.folder_id) === String(folder_id) &&
+                    !previously_trashed.has(String(message_id))
+                ) {
+                    // Already in the destination folder; the queue treated
+                    // this as a no-op.
+                    continue;
+                }
                 if (previously_trashed.has(String(message_id))) {
                     if (target_is_trash) {
                         // Moving to trash again is a no-op; keep the row trashed.
@@ -1535,11 +1629,15 @@ function show_account_contextmenu(event, kind, id, account_id, title) {
     const account = find_account(account_id);
     const pending_count = account ? (account.pending_count || 0) : 0;
     const conflict_count = account ? (account.conflict_count || 0) : 0;
-    context_retry_pending_button.classList.toggle("hidden", pending_count === 0);
-    context_discard_pending_button.classList.toggle(
-        "hidden",
-        (pending_count + conflict_count) === 0
-    );
+    if (context_retry_pending_button) {
+        context_retry_pending_button.classList.toggle("hidden", pending_count === 0);
+    }
+    if (context_discard_pending_button) {
+        context_discard_pending_button.classList.toggle(
+            "hidden",
+            (pending_count + conflict_count) === 0
+        );
+    }
     context_title.textContent = title;
     context_settings_link.href = `/account/${account_id}/settings`;
     contextmenus.show_menu(event, context_menu);
@@ -1600,11 +1698,21 @@ function build_message_contextmenu(ids) {
         note.textContent = destinations.note;
         message_context_move_list.appendChild(note);
     }
-    for (const folder of destinations.folders) {
+    let last_account_id = null;
+    for (const destination of destinations.folders) {
+        const account = destination.account;
+        const folder = destination.folder;
+        if (String(account.id) !== String(last_account_id)) {
+            const heading = document.createElement("div");
+            heading.classList.add("context_note");
+            heading.textContent = account.display_name;
+            message_context_move_list.appendChild(heading);
+            last_account_id = account.id;
+        }
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = folder.display_name || folder.name;
-        button.title = folder.name;
+        button.title = `${account.display_name}: ${folder.name}`;
         button.addEventListener("click", function() {
             contextmenus.hide_open_menus();
             move_messages(ids, folder.id);
@@ -1618,29 +1726,147 @@ function message_context_destinations(ids) {
     if (messages.length === 0) {
         return {folders: [], note: "Move is unavailable."};
     }
-    const account_id = messages[0].account_id;
-    if (!messages.every(message => String(message.account_id) === String(account_id))) {
+    const source_account_id = messages[0].account_id;
+    if (!messages.every(message => String(message.account_id) === String(source_account_id))) {
         return {folders: [], note: "Move requires messages from one account."};
-    }
-    const account = find_account(account_id);
-    if (!account) {
-        return {folders: [], note: "Move is unavailable."};
     }
     const folder_ids = new Set(messages.map(message => String(message.folder_id)));
     const current_folder_id = folder_ids.size === 1 ? Array.from(folder_ids)[0] : null;
-    const folders = account.folders.filter(folder => {
-        if (!folder.selectable) {
-            return false;
+    const folders = [];
+    for (const account of accounts_data) {
+        for (const folder of account.folders) {
+            if (!folder.selectable) {
+                continue;
+            }
+            if (current_folder_id !== null && String(folder.id) === current_folder_id) {
+                continue;
+            }
+            folders.push({account: account, folder: folder});
         }
-        if (current_folder_id !== null && String(folder.id) === current_folder_id) {
-            return false;
-        }
-        return true;
-    });
+    }
     return {
         folders: folders,
         note: folders.length === 0 ? "No other folders." : "",
     };
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// DRAG AND DROP
+
+function clear_drop_targets() {
+    if (!accounts_element) {
+        return;
+    }
+    for (const folder_element of accounts_element.querySelectorAll(".folder.drop_target")) {
+        folder_element.classList.remove("drop_target");
+    }
+}
+
+function clear_drag_state() {
+    if (messages_element) {
+        for (const row of messages_element.querySelectorAll(".message.dragging")) {
+            row.classList.remove("dragging");
+        }
+    }
+    clear_drop_targets();
+    drag_message_ids = [];
+    drag_source_account_ids = new Set();
+}
+
+function on_messages_dragstart(event) {
+    const row = event.target.closest(".message");
+    if (!row || !event.dataTransfer) {
+        event.preventDefault();
+        return;
+    }
+
+    const message_id = String(row.dataset.id);
+    if (!selected_ids.has(message_id)) {
+        select_only(message_id);
+    }
+    const ids = get_selected_ids();
+    if (ids.length === 0) {
+        event.preventDefault();
+        return;
+    }
+
+    const messages = ids.map(find_message).filter(Boolean);
+    const account_ids = new Set(
+        messages.map(message => String(message.account_id))
+    );
+    if (account_ids.size !== 1) {
+        event.preventDefault();
+        alert("Move requires messages from one account.");
+        return;
+    }
+
+    drag_message_ids = ids;
+    drag_source_account_ids = account_ids;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", ids.join(","));
+    for (const selected_id of ids) {
+        const selected_row = message_row(selected_id);
+        if (selected_row) {
+            selected_row.classList.add("dragging");
+        }
+    }
+}
+
+function on_messages_dragend(event) {
+    clear_drag_state();
+}
+
+function on_folder_dragover(event) {
+    if (drag_message_ids.length === 0 || drag_source_account_ids.size !== 1) {
+        return;
+    }
+    const folder_element = event.target.closest(".folder");
+    if (!folder_element) {
+        return;
+    }
+    const folder = find_folder(folder_element.dataset.folderId);
+    if (!folder || !folder.selectable || !event.dataTransfer) {
+        return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    for (const other of accounts_element.querySelectorAll(".folder.drop_target")) {
+        if (other !== folder_element) {
+            other.classList.remove("drop_target");
+        }
+    }
+    folder_element.classList.add("drop_target");
+}
+
+function on_folder_dragleave(event) {
+    const folder_element = event.target.closest(".folder");
+    if (!folder_element) {
+        return;
+    }
+    if (event.relatedTarget && folder_element.contains(event.relatedTarget)) {
+        return;
+    }
+    folder_element.classList.remove("drop_target");
+}
+
+function on_folder_drop(event) {
+    const folder_element = event.target.closest(".folder");
+    if (
+        !folder_element ||
+        drag_message_ids.length === 0 ||
+        drag_source_account_ids.size !== 1
+    ) {
+        return;
+    }
+    event.preventDefault();
+    const folder = find_folder(folder_element.dataset.folderId);
+    const ids = drag_message_ids.slice();
+    clear_drag_state();
+    if (!folder || !folder.selectable) {
+        return;
+    }
+    move_messages(ids, folder.id);
 }
 
 
@@ -2065,6 +2291,12 @@ function on_pageload() {
     context_retry_pending_button = document.getElementById("context_retry_pending_button");
     context_discard_pending_button = document.getElementById("context_discard_pending_button");
     context_settings_link = document.getElementById("context_settings_link");
+    if (!context_retry_pending_button || !context_discard_pending_button) {
+        console.warn(
+            "The page is missing the pending-queue context menu controls. " +
+            "Restart the BringMail server and refresh the page to load the current template."
+        );
+    }
 
     message_context_menu = document.getElementById("message_contextmenu");
     message_context_title = document.getElementById("message_context_title");
@@ -2077,6 +2309,11 @@ function on_pageload() {
     messages_element.addEventListener("click", on_messages_click);
     messages_element.addEventListener("contextmenu", on_messages_contextmenu);
     messages_element.addEventListener("scroll", maybe_load_more_messages);
+    messages_element.addEventListener("dragstart", on_messages_dragstart);
+    messages_element.addEventListener("dragend", on_messages_dragend);
+    accounts_element.addEventListener("dragover", on_folder_dragover);
+    accounts_element.addEventListener("dragleave", on_folder_dragleave);
+    accounts_element.addEventListener("drop", on_folder_drop);
 
     message_context_read_button.addEventListener("click", function() {
         contextmenus.hide_open_menus();
@@ -2140,21 +2377,25 @@ function on_pageload() {
         }
     });
 
-    context_retry_pending_button.addEventListener("click", function() {
-        contextmenus.hide_open_menus();
-        if (!context_target) {
-            return;
-        }
-        retry_pending_actions(context_target.account_id);
-    });
+    if (context_retry_pending_button) {
+        context_retry_pending_button.addEventListener("click", function() {
+            contextmenus.hide_open_menus();
+            if (!context_target) {
+                return;
+            }
+            retry_pending_actions(context_target.account_id);
+        });
+    }
 
-    context_discard_pending_button.addEventListener("click", function() {
-        contextmenus.hide_open_menus();
-        if (!context_target) {
-            return;
-        }
-        discard_pending_actions(context_target.account_id);
-    });
+    if (context_discard_pending_button) {
+        context_discard_pending_button.addEventListener("click", function() {
+            contextmenus.hide_open_menus();
+            if (!context_target) {
+                return;
+            }
+            discard_pending_actions(context_target.account_id);
+        });
+    }
 
     accounts_element.addEventListener("contextmenu", function(event) {
         const folder = event.target.closest(".folder");

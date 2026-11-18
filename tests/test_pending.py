@@ -23,6 +23,10 @@ class FakeFlushClient:
         self.move_calls = []
         self.copy_calls = []
         self.expunge_calls = []
+        self.append_calls = []
+        self.search_results = None
+        self.append_error = None
+        self.move_error = None
         self.fetch_flags = {}
         self.fetch_calls = []
         self.logged_out = False
@@ -51,6 +55,8 @@ class FakeFlushClient:
         return result
 
     def search(self, criteria):
+        if self.search_results is not None:
+            return list(self.search_results)
         return [1]
 
     def add_flags(self, messages, flags):
@@ -61,11 +67,24 @@ class FakeFlushClient:
 
     def move(self, messages, folder):
         self.move_calls.append((list(messages), folder))
+        if self.move_error is not None:
+            raise self.move_error
         return b'[COPYUID 1 1 42]'
 
     def copy(self, messages, folder):
         self.copy_calls.append((list(messages), folder))
         return b'[COPYUID 1 1 42]'
+
+    def append(self, folder, message, flags=(), msg_time=None):
+        self.append_calls.append((
+            folder,
+            message,
+            list(flags),
+            msg_time,
+        ))
+        if self.append_error is not None:
+            raise self.append_error
+        return b'[APPENDUID 1 42]'
 
     def expunge(self, messages):
         self.expunge_calls.append(list(messages))
@@ -152,12 +171,17 @@ class PendingQueueTest(unittest.TestCase):
             side_effect=list(results),
         )
 
-    def _flush(self, client=None, conditional=None):
+    def _flush(self, client=None, conditional=None, destination_client=None):
         client = client or FakeFlushClient()
         patches = [
             mock.patch('bringmail.helpers.connect_imap', return_value=client),
             mock.patch.object(self.db, '_sync_folder'),
         ]
+        if destination_client is not None:
+            patches.append(mock.patch(
+                'bringmail.helpers.imap_call',
+                side_effect=lambda account, function: function(destination_client),
+            ))
         if conditional is not None:
             patches.append(mock.patch(
                 'bringmail.helpers.conditional_store',
@@ -167,6 +191,234 @@ class PendingQueueTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         return (self.db.flush_pending(self.account), client)
+
+    def _add_destination_account(self):
+        with self.db.transaction:
+            account = self.db.add_account(
+                label='Destination',
+                host='imap.example.com',
+                port=993,
+                ssl=True,
+                starttls=False,
+                username='destination@example.com',
+                password='hunter2',
+                autorefresh_interval=900,
+            )
+            folder = self.db.add_folder(
+                account=account,
+                name='DestInbox',
+                display_name='Dest Inbox',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_INBOX,
+            )
+            trash = self.db.add_folder(
+                account=account,
+                name='DestTrash',
+                display_name='Dest Trash',
+                delimiter='/',
+                special_use=constants.SPECIAL_USE_TRASH,
+            )
+        self._set_folder_state(folder, uidvalidity=1, highestmodseq=5)
+        self._set_folder_state(trash, uidvalidity=1, highestmodseq=5)
+        return (account, folder, trash)
+
+    def _remove_source_trash(self):
+        with self.db.transaction:
+            self.db.delete(
+                table=objects.Folder,
+                pairs={'id': self.trash.id},
+            )
+        self.db.caches[objects.Folder].clear()
+
+    def _set_message_body(self):
+        raw = (
+            b'From: sender@example.com\r\n'
+            b'To: recipient@example.com\r\n'
+            b'Subject: test\r\n'
+            b'Message-ID: <test@example.com>\r\n'
+            b'Date: Thu, 01 Jan 2026 00:00:00 +0000\r\n'
+            b'\r\n'
+            b'Body text.\r\n'
+        )
+        with self.db.transaction:
+            self.db.update_message_body(
+                self.message.id,
+                raw=raw,
+                meta=self.message.meta,
+                size=10,
+                update_flags=False,
+            )
+        self.db.caches[objects.Message].clear()
+        self.message = self.db.get_message(self.message.id)
+        return raw
+
+    def test_queue_move_to_account_records_operation(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        result = self.message.queue_move_to_account(destination_folder)
+
+        self.assertTrue(result.queued)
+        self.assertFalse(result.copy_only)
+        self.assertEqual(result.operation, constants.OPERATION_MOVE_ACCOUNT)
+
+        rows = self.db.get_pending_for_message(self.message.id)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row.operation, constants.OPERATION_MOVE_ACCOUNT)
+        self.assertEqual(row.folder_id, self.inbox.id)
+        self.assertEqual(row.target_folder_id, destination_folder.id)
+        self.assertEqual(row.base_folder_id, self.inbox.id)
+        self.assertEqual(self.db.get_message(self.message.id).folder_id, self.inbox.id)
+
+    def test_queue_move_delegates_cross_account_destination(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        self.assertTrue(self.message.queue_move(destination_folder))
+        row = self.db.get_pending_for_message(self.message.id)[0]
+        self.assertEqual(row.operation, constants.OPERATION_MOVE_ACCOUNT)
+
+    def test_second_cross_account_operation_is_rejected(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        self.message.queue_move_to_account(destination_folder)
+        with self.assertRaises(exceptions.InvalidFolder):
+            self.message.queue_move_to_account(destination_folder)
+
+    def test_queue_move_to_account_without_source_trash_is_copy_only(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        self._remove_source_trash()
+
+        result = self.message.queue_move_to_account(destination_folder)
+
+        self.assertTrue(result.queued)
+        self.assertTrue(result.copy_only)
+        self.assertEqual(result.operation, constants.OPERATION_COPY_ACCOUNT)
+        row = self.db.get_pending_for_message(self.message.id)[0]
+        self.assertEqual(row.operation, constants.OPERATION_COPY_ACCOUNT)
+
+    def test_flush_cross_account_move_copies_then_trashes(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        raw = self._set_message_body()
+        self.message.queue_move_to_account(destination_folder)
+
+        source_client = FakeFlushClient()
+        destination_client = FakeFlushClient()
+        destination_client.search_results = []
+        (summary, source_client) = self._flush(
+            client=source_client,
+            destination_client=destination_client,
+        )
+
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(summary['refresh_folder_ids'], [destination_folder.id])
+        self.assertEqual(len(destination_client.append_calls), 1)
+        (folder_name, appended_raw, flags, msg_time) = destination_client.append_calls[0]
+        self.assertEqual(folder_name, destination_folder.name)
+        self.assertEqual(appended_raw, raw)
+        self.assertEqual(source_client.move_calls, [([1], self.trash.name)])
+
+        message = self.db.get_message(self.message.id)
+        self.assertEqual(message.folder_id, self.trash.id)
+        self.assertEqual(message.uid, 42)
+        self.assertEqual(message.uidvalidity, 1)
+        pending = self.db.get_pending_for_message(self.message.id)[0]
+        self.assertEqual(pending.state, constants.PENDING_STATE_SENT)
+
+    def test_flush_cross_account_append_failure_leaves_source(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        self._set_message_body()
+        self.message.queue_move_to_account(destination_folder)
+
+        source_client = FakeFlushClient()
+        destination_client = FakeFlushClient()
+        destination_client.search_results = []
+        destination_client.append_error = RuntimeError('append failed')
+        (summary, source_client) = self._flush(
+            client=source_client,
+            destination_client=destination_client,
+        )
+
+        self.assertEqual(summary['sent'], 0)
+        self.assertEqual(len(destination_client.append_calls), 1)
+        self.assertEqual(source_client.move_calls, [])
+        message = self.db.get_message(self.message.id)
+        self.assertEqual(message.folder_id, self.inbox.id)
+        pending = self.db.get_pending_for_message(self.message.id)[0]
+        self.assertEqual(pending.state, constants.PENDING_STATE_PENDING)
+
+    def test_flush_cross_account_retries_cleanup_without_second_append(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        self._set_message_body()
+        self.message.queue_move_to_account(destination_folder)
+
+        source_client = FakeFlushClient()
+        source_client.move_error = RuntimeError('trash failed')
+        destination_client = FakeFlushClient()
+        destination_client.search_results = []
+        self._flush(client=source_client, destination_client=destination_client)
+
+        self.assertEqual(len(destination_client.append_calls), 1)
+        self.assertEqual(
+            self.db.get_message(self.message.id).folder_id,
+            self.inbox.id,
+        )
+
+        with self.db.transaction:
+            self.db.execute(
+                'UPDATE pending_operations SET next_attempt = 0 WHERE message_id == ?',
+                [self.message.id],
+            )
+
+        destination_client.search_results = [99]
+        source_client_2 = FakeFlushClient()
+        (summary, source_client_2) = self._flush(
+            client=source_client_2,
+            destination_client=destination_client,
+        )
+
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(len(destination_client.append_calls), 1)
+        self.assertEqual(source_client_2.move_calls, [([1], self.trash.name)])
+        self.assertEqual(
+            self.db.get_message(self.message.id).folder_id,
+            self.trash.id,
+        )
+
+    def test_flush_cross_account_copy_only_keeps_source(self):
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        self._remove_source_trash()
+        self._set_message_body()
+        result = self.message.queue_move_to_account(destination_folder)
+        self.assertTrue(result.copy_only)
+
+        source_client = FakeFlushClient()
+        destination_client = FakeFlushClient()
+        destination_client.search_results = []
+        (summary, source_client) = self._flush(
+            client=source_client,
+            destination_client=destination_client,
+        )
+
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(len(destination_client.append_calls), 1)
+        self.assertEqual(source_client.move_calls, [])
+        message = self.db.get_message(self.message.id)
+        self.assertEqual(message.folder_id, self.inbox.id)
+        pending = self.db.get_pending_for_message(self.message.id)[0]
+        self.assertEqual(pending.state, constants.PENDING_STATE_SENT)
 
     def test_queue_seen_applies_locally_and_records_prestate(self):
         changed = self.message.queue_seen(True)
