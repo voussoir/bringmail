@@ -6,6 +6,26 @@ function get_account_id() {
     return value;
 }
 
+function is_offline_mode() {
+    if (document.body.dataset.accountOffline === "1") {
+        return true;
+    }
+    const checkbox = document.getElementById("offline_input");
+    return Boolean(checkbox && checkbox.checked);
+}
+
+function update_offline_visibility() {
+    const offline = is_offline_mode();
+    const connection_fields = document.getElementById("connection_fields");
+    if (connection_fields) {
+        connection_fields.classList.toggle("hidden", offline);
+    }
+    const refresh_panel = document.getElementById("refresh_panel");
+    if (refresh_panel) {
+        refresh_panel.classList.toggle("hidden", offline);
+    }
+}
+
 function read_number_input(id) {
     const value = parseInt(document.getElementById(id).value, 10);
     if (isNaN(value)) {
@@ -29,13 +49,19 @@ function show_message(text, is_error) {
 function collect_form_data() {
     const data = {
         label: document.getElementById("label_input").value.trim(),
-        host: document.getElementById("host_input").value.trim(),
-        port: read_number_input("port_input"),
-        ssl: document.getElementById("ssl_input").checked,
-        starttls: document.getElementById("starttls_input").checked,
-        username: document.getElementById("username_input").value.trim(),
-        autorefresh_interval: read_interval_seconds(),
     };
+    if (is_offline_mode()) {
+        if (!get_account_id()) {
+            data.offline = true;
+        }
+        return data;
+    }
+    data.host = document.getElementById("host_input").value.trim();
+    data.port = read_number_input("port_input");
+    data.ssl = document.getElementById("ssl_input").checked;
+    data.starttls = document.getElementById("starttls_input").checked;
+    data.username = document.getElementById("username_input").value.trim();
+    data.autorefresh_interval = read_interval_seconds();
     const password = document.getElementById("password_input").value;
     if (password) {
         data.password = password;
@@ -47,18 +73,26 @@ function save_account(event) {
     const button = document.getElementById("save_button");
     const account_id = get_account_id();
     const data = collect_form_data();
+    const offline = is_offline_mode();
 
-    if (!data.host) {
-        alert("Host is required.");
-        return;
-    }
-    if (!data.username) {
-        alert("Username is required.");
-        return;
-    }
-    if (!account_id && !data.password) {
-        alert("Password is required.");
-        return;
+    if (offline) {
+        if (!data.label) {
+            alert("Label is required for offline accounts.");
+            return;
+        }
+    } else {
+        if (!data.host) {
+            alert("Host is required.");
+            return;
+        }
+        if (!data.username) {
+            alert("Username is required.");
+            return;
+        }
+        if (!account_id && !data.password) {
+            alert("Password is required.");
+            return;
+        }
     }
 
     button.disabled = true;
@@ -212,6 +246,11 @@ function load_idle_status() {
 
 document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("save_button").addEventListener("click", save_account);
+    const offline_input = document.getElementById("offline_input");
+    if (offline_input) {
+        offline_input.addEventListener("change", update_offline_visibility);
+    }
+    update_offline_visibility();
     const test_button = document.getElementById("test_button");
     if (test_button) {
         test_button.addEventListener("click", test_connection);

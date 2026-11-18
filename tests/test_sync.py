@@ -339,6 +339,41 @@ class SyncTest(unittest.TestCase):
 
         self.assertEqual(self.db.get_folder_uids(folder), {1})
 
+    def test_offline_account_sync_never_opens_a_network_connection(self):
+        with self.db.transaction:
+            offline = self.db.add_account(label='Offline', offline=True)
+
+        with mock.patch(
+                'bringmail.helpers.imapclient.IMAPClient',
+                side_effect=AssertionError('offline account opened a socket')):
+            self.assertIsNone(offline.refresh())
+
+        self.assertEqual(
+            {folder.name for folder in offline.get_folders()},
+            {'INBOX', 'Trash'},
+        )
+        self.assertGreater(offline.last_refresh, 0)
+        self.assertIsNone(offline.last_refresh_error)
+
+        with mock.patch(
+                'bringmail.helpers.imapclient.IMAPClient',
+                side_effect=AssertionError('offline account opened a socket')):
+            self.assertEqual(offline.test_connection(), 2)
+
+    def test_offline_account_folder_sync_is_local(self):
+        with self.db.transaction:
+            offline = self.db.add_account(label='Offline', offline=True)
+        inbox = offline.get_folders()[0]
+
+        with mock.patch(
+                'bringmail.helpers.imapclient.IMAPClient',
+                side_effect=AssertionError('offline account opened a socket')):
+            self.assertIsNone(self.db.sync_folder(offline, inbox))
+
+        inbox = self.db.get_folder(inbox.id)
+        self.assertGreater(inbox.last_sync, 0)
+        self.assertIsNone(inbox.last_sync_error)
+
 
 if __name__ == '__main__':
     unittest.main()

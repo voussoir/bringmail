@@ -23,9 +23,10 @@ because the database's column index is loaded before migrations run. Add a
 test in tests/test_upgrades.py for every migration.
 
 The upgrade functions run with foreign key enforcement disabled and inside one
-transaction per version. Indices from constants.DB_INIT are recreated and
-PRAGMA foreign_key_check is run before each version is committed. A migration
-function must not commit or start its own transaction.
+transaction per version. Indices from constants.DB_INIT and triggers from
+constants.DB_TRIGGERS are recreated, and PRAGMA foreign_key_check is run before
+each version is committed. A migration function must not commit or start its
+own transaction.
 '''
 import dataclasses
 import os
@@ -264,6 +265,32 @@ class Migrator:
             if statement.upper().startswith(('CREATE INDEX', 'CREATE UNIQUE INDEX')):
                 self.execute(statement)
 
+    def recreate_triggers(self):
+        '''
+        Recreate the triggers declared in constants.DB_TRIGGERS.
+
+        Triggers are dropped together with their table during rebuild_table, so
+        every migration must restore them. The statements use IF NOT EXISTS.
+
+        The trigger refers to the accounts.offline column, which does not exist
+        until the 2 -> 3 migration has run. Skipping the trigger for older
+        intermediate schemas keeps a 1 -> 3 upgrade working; the 2 -> 3 step
+        creates it on the rebuilt table.
+        '''
+        table = self.db.sql_write.execute(
+            "SELECT name FROM sqlite_master WHERE type == 'table' AND name == 'accounts'"
+        ).fetchone()
+        if table is None:
+            return
+        columns = {
+            row['name']
+            for row in self.db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
+        }
+        if 'offline' not in columns:
+            return
+        for statement in constants.DB_TRIGGERS:
+            self.execute(statement)
+
 
 def _set_foreign_keys(db, enabled):
     '''
@@ -349,6 +376,32 @@ def upgrade_1_to_2(migrator):
         FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE CASCADE
     )
     ''')
+
+
+@upgrade_function(2, 3)
+def upgrade_2_to_3(migrator):
+    '''
+    Add offline accounts. Existing accounts become online accounts. The
+    connection columns become nullable because offline accounts must store no
+    host, port, username, or password, and a CHECK constraint enforces both
+    shapes. A trigger keeps the offline flag immutable.
+    '''
+    migrator.rebuild_table(
+        'accounts',
+        create_sql=constants.DB_ACCOUNTS_TABLE,
+        transfer_sql='''
+        INSERT INTO {table} (
+            id, label, host, port, ssl, starttls, username, password,
+            autorefresh_interval, ui_order_rank, created, last_refresh,
+            last_refresh_attempt, last_refresh_error
+        )
+        SELECT
+            id, label, host, port, ssl, starttls, username, password,
+            autorefresh_interval, ui_order_rank, created, last_refresh,
+            last_refresh_attempt, last_refresh_error
+        FROM {old_table}
+        ''',
+    )
 
 
 def upgrade_all(
@@ -445,6 +498,7 @@ def upgrade_all(
                         migrator = Migrator(db)
                         function(migrator)
                         migrator.recreate_indices()
+                        migrator.recreate_triggers()
 
                         violations = db.sql_write.execute(
                             'PRAGMA foreign_key_check'

@@ -741,7 +741,14 @@ def connect_imap(account):
     '''
     Open and authenticate an IMAP connection. The caller owns the connection
     and is responsible for logging out.
+
+    Offline accounts have no server. They receive a database-backed client
+    with the same interface, so sync and message actions use one code path.
     '''
+    if getattr(account, 'offline', False):
+        from . import offline
+        return offline.OfflineClient(account)
+
     ssl_context = None
     if account.ssl or account.starttls:
         ssl_context = make_ssl_context()
@@ -1084,7 +1091,14 @@ def imap_call(account, function):
     with a fresh login. We deliberately do not retry inside this function,
     because retrying a MOVE or STORE after an ambiguous network failure could
     apply it twice.
+
+    Offline accounts are not cached: their client is a thin database adapter,
+    and a fresh one per call avoids keeping mutable selection state around.
     '''
+    if getattr(account, 'offline', False):
+        from . import offline
+        return function(offline.OfflineClient(account))
+
     lock = _imap_session_lock(account.id)
     with lock:
         client = None

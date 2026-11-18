@@ -87,6 +87,16 @@ def _response_flag_info(data):
     return (standard, keywords, modseq)
 
 
+def _client_has_capability(client, capability):
+    '''
+    Best-effort capability check for both real and test clients.
+    '''
+    try:
+        return bool(client.has_capability(capability))
+    except Exception:
+        return False
+
+
 class BDBAccountMixin:
     def __init__(self):
         super().__init__()
@@ -96,32 +106,54 @@ class BDBAccountMixin:
             self,
             *,
             label=None,
-            host,
-            password,
-            port=993,
+            offline=False,
+            host=None,
+            password=None,
+            port=None,
             autorefresh_interval=constants.DEFAULT_AUTOREFRESH_INTERVAL,
             ssl=True,
             starttls=False,
-            username,
+            username=None,
         ):
-        label = objects.Account.normalize_label(label)
-        host = objects.Account.normalize_host(host)
-        port = objects.Account.normalize_port(port)
-        ssl = helpers.normalize_bool(ssl)
-        starttls = helpers.normalize_bool(starttls)
-        username = objects.Account.normalize_username(username)
-        password = objects.Account.normalize_password(password)
-        autorefresh_interval = objects.Account.normalize_autorefresh_interval(autorefresh_interval)
+        offline = helpers.normalize_bool(offline)
 
-        existing = self.select_one(
-            'SELECT id FROM accounts WHERE host == ? AND port == ? AND username == ?',
-            [host, port, username],
-        )
-        if existing is not None:
-            raise exceptions.DuplicateAccount(host=host, port=port, username=username)
+        if offline:
+            if any(value is not None for value in (host, port, username, password)):
+                raise exceptions.InvalidAccount(
+                    'Offline accounts do not have IMAP connection settings.'
+                )
+            if not isinstance(label, str) or not label.strip():
+                raise exceptions.InvalidAccount(
+                    'An offline account requires a label.'
+                )
+            label = label.strip()
+            host = None
+            port = None
+            username = None
+            password = None
+            ssl = False
+            starttls = False
+            autorefresh_interval = 0
+        else:
+            label = objects.Account.normalize_label(label)
+            host = objects.Account.normalize_host(host)
+            port = objects.Account.normalize_port(port if port is not None else 993)
+            ssl = helpers.normalize_bool(ssl)
+            starttls = helpers.normalize_bool(starttls)
+            username = objects.Account.normalize_username(username)
+            password = objects.Account.normalize_password(password)
+            autorefresh_interval = objects.Account.normalize_autorefresh_interval(autorefresh_interval)
+
+            existing = self.select_one(
+                'SELECT id FROM accounts WHERE host == ? AND port == ? AND username == ?',
+                [host, port, username],
+            )
+            if existing is not None:
+                raise exceptions.DuplicateAccount(host=host, port=port, username=username)
 
         data = {
             'id': self.generate_id(objects.Account),
+            'offline': offline,
             'label': label,
             'host': host,
             'port': port,
@@ -141,7 +173,66 @@ class BDBAccountMixin:
             objects.Account,
             self.select_one('SELECT * FROM accounts WHERE id == ?', [data['id']]),
         )
+        if offline:
+            self.ensure_offline_folders(account)
         return account
+
+    def ensure_offline_folders(self, account):
+        '''
+        Ensure an offline account has its fixed Inbox and Trash folders.
+
+        Offline accounts have no server to discover folders from, so this is
+        the local equivalent of the folder list. It is idempotent and is
+        called both at account creation and by the offline IMAP mock. The
+        caller must provide an active transaction.
+        '''
+        if not isinstance(account, objects.Account):
+            raise TypeError(account)
+        if not account.offline:
+            raise exceptions.InvalidAccount(
+                'Only offline accounts have local folders.'
+            )
+
+        specs = (
+            (
+                constants.OFFLINE_INBOX_NAME,
+                'Inbox',
+                constants.SPECIAL_USE_INBOX,
+            ),
+            (
+                constants.OFFLINE_TRASH_NAME,
+                'Trash',
+                constants.SPECIAL_USE_TRASH,
+            ),
+        )
+        for (index, (name, display_name, special_use)) in enumerate(specs):
+            folder = self.get_folder_by_name(account, name)
+            if folder is None:
+                folder = self.add_folder(
+                    account=account,
+                    name=name,
+                    display_name=display_name,
+                    delimiter=constants.OFFLINE_FOLDER_DELIMITER,
+                    attributes=[],
+                    special_use=special_use,
+                    ui_order_rank=index + 1,
+                )
+
+            pairs = {}
+            if folder.uidvalidity is None:
+                pairs['uidvalidity'] = constants.OFFLINE_UIDVALIDITY
+            if folder.uidnext is None:
+                pairs['uidnext'] = constants.OFFLINE_UIDNEXT
+            if not pairs:
+                continue
+            pairs['id'] = folder.id
+            self.update(table=objects.Folder, pairs=pairs, where_key='id')
+            if 'uidvalidity' in pairs:
+                folder.uidvalidity = pairs['uidvalidity']
+            if 'uidnext' in pairs:
+                folder.uidnext = pairs['uidnext']
+
+        return self.get_folders(account)
 
     def get_account(self, account_id) -> objects.Account:
         return self.get_object_by_id(objects.Account, account_id)
@@ -1394,7 +1485,7 @@ class BDBPendingMixin:
 
 def _outbox_message_flags(message):
     '''
-    Flags to carry across an account boundary. \Deleted is deliberately not
+    Flags to carry across an account boundary. \\Deleted is deliberately not
     copied because the destination copy is a new live message.
     '''
     flags = [
@@ -1729,6 +1820,14 @@ class BDBOutboxMixin:
 
             self._outbox_refresh_folder_ids = set()
             for (index, operation) in enumerate(plan.execute):
+                # An earlier operation in this plan may have retired this row
+                # (for example a cross-account move deletes an offline source
+                # message and supersedes its later flag operations).
+                current = self.get_pending_operation(operation.id)
+                if (
+                        current is None or
+                        current.state != constants.PENDING_STATE_PENDING):
+                    continue
                 try:
                     refresh_folder_id = self._outbox_execute(client, operation)
                     if refresh_folder_id is not None:
@@ -1972,7 +2071,10 @@ class BDBOutboxMixin:
                         'The message changed on the server after this action was queued.'
                     )
         else:
-            if operation.operation == constants.OPERATION_KEYWORDS:
+            if (
+                    operation.operation == constants.OPERATION_KEYWORDS and
+                    not message.account.offline
+            ):
                 response = client.fetch([int(message.uid)], ['FLAGS'])
                 data = response.get(int(message.uid)) or {}
                 (_server_flags, server_keywords, _server_modseq) = _response_flag_info(data)
@@ -2196,6 +2298,45 @@ class BDBOutboxMixin:
         if refresh_folder_ids is not None:
             refresh_folder_ids.add(target.id)
 
+        source_account = message.account
+        if source_account.offline:
+            # Moving out of an offline account is a true local move: the
+            # destination copy has succeeded, so the local source row is
+            # removed instead of moving to the offline Trash. This also
+            # upgrades any copy-only row left pending by an older version.
+            with self.transaction:
+                source_uidnext = max(
+                    int(source.uidnext or 1),
+                    int(message.uid) + 1,
+                )
+                self.update(
+                    table=objects.Folder,
+                    pairs={'id': source.id, 'uidnext': source_uidnext},
+                    where_key='id',
+                )
+                source.uidnext = source_uidnext
+                other_rows = self.get_pending_operations(
+                    message_ids=[message.id],
+                    states=(constants.PENDING_STATE_PENDING,),
+                )
+                for row in other_rows:
+                    if row.id == operation.id:
+                        continue
+                    self.set_pending_state(
+                        row.id,
+                        constants.PENDING_STATE_SUPERSEDED,
+                        last_error='The message was moved out of the offline account.',
+                    )
+                self.delete(table=objects.Message, pairs={'id': message.id})
+                self.set_pending_state(operation.id, constants.PENDING_STATE_SENT)
+            self.caches[objects.Message].clear()
+            log.info(
+                'Moved message %s out of offline account %s; removed the local row.',
+                message.id,
+                source_account,
+            )
+            return target.id
+
         if copy_only or trash is None or trash.id == source.id:
             if operation.operation == constants.OPERATION_MOVE_ACCOUNT:
                 log.warning(
@@ -2213,6 +2354,7 @@ class BDBOutboxMixin:
                 destination_name=trash.name,
                 uid=message.uid,
                 message_id=message.message_id,
+                allow_copy_fallback=not _client_has_capability(client, 'MOVE'),
             )
         except Exception as exc:
             raise RuntimeError(
@@ -2317,6 +2459,8 @@ class BringMailDB(
                 statement = statement.strip()
                 if statement:
                     self.execute(statement)
+            for statement in constants.DB_TRIGGERS:
+                self.execute(statement)
             self.pragma_write('user_version', constants.DATABASE_VERSION)
 
     def _init_caches(self):

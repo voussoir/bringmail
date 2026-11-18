@@ -31,6 +31,10 @@
     grid-auto-flow: row;
     grid-gap: 6px;
 }
+.group h2
+{
+    margin-top: 0;
+}
 .group label
 {
     display: inline-block;
@@ -51,6 +55,12 @@
 #password_input
 {
     min-width: 22em;
+}
+#interval_hours_input,
+#interval_minutes_input
+{
+    min-width: 4em;
+    width: 4em;
 }
 .buttons
 {
@@ -107,16 +117,12 @@ pre.error_details
 </style>
 </head>
 
-<body data-account-id="{{ account.id if account else '' }}">
+<body data-account-id="{{ account.id if account else '' }}" data-account-offline="{{ 1 if account and account.offline else 0 }}">
 {{header.make_header(site=site, request=request)}}
 <div id="content_body">
 
     {% if account %}
     <h1>{{account.display_name}}</h1>
-    <p>ID: <code>{{account.id}}</code></p>
-    {% if account.last_refresh %}
-    <p>Last refresh: {{account.last_refresh|timestamp_to_8601_local}}</p>
-    {% endif %}
     {% if account.last_refresh_error %}
     <div class="error_header">
         <p>The last refresh attempt at {{account.last_refresh_attempt|timestamp_to_8601_local}} encountered an error:</p>
@@ -129,46 +135,71 @@ pre.error_details
     {% endif %}
 
     <div class="group panel">
-        <h2>Connection</h2>
-        <div><label>Label</label><input type="text" id="label_input" placeholder="Optional display name" value="{% if account %}{{account.label or ''}}{% endif %}"/></div>
-        <div><label>Host</label><input type="text" id="host_input" placeholder="imap.example.com" value="{{account.host if account else ''}}"/></div>
-        <div><label>Port</label><input type="number" id="port_input" min="1" max="65535" value="{{account.port if account else 993}}"/></div>
-        <div><label>SSL</label><input type="checkbox" id="ssl_input" {% if not account or account.ssl %}checked{% endif %}/></div>
-        <div><label>STARTTLS</label><input type="checkbox" id="starttls_input" {% if account and account.starttls %}checked{% endif %}/></div>
+        <h2>Account</h2>
+        <div><label for="label_input">Label</label><input type="text" id="label_input" placeholder="Optional display name; required for offline accounts" value="{% if account %}{{account.label or ''}}{% endif %}"/></div>
         {% if account %}
-        <div>
-            <label>IMAP IDLE</label>
-            <input type="checkbox" id="idle_status_input" disabled aria-readonly="true" title="IMAP IDLE state is controlled automatically"/>
-            <span id="idle_status_detail">checking...</span>
-        </div>
+        <p>ID: <code>{{account.id}}</code></p>
         {% endif %}
-        <div><label>Username</label><input type="text" id="username_input" autocomplete="username" value="{{account.username if account else ''}}"/></div>
-        <div>
-            <label>Password</label>
-            <input type="password" id="password_input" autocomplete="current-password" placeholder="{% if account %}Leave blank to keep the current password{% else %}Password{% endif %}"/>
-        </div>
-        <p>Passwords are stored in the local BringMail SQLite database. Use a dedicated application password where your mail provider supports them.</p>
     </div>
 
     <div class="group panel">
+        <h2>Connection</h2>
+        {% if not account or account.offline %}
+        <div>
+            <label for="offline_input">Offline Account</label>
+            <input type="checkbox" id="offline_input" {% if account and account.offline %}checked disabled aria-readonly="true"{% endif %}/>
+        </div>
+        {% endif %}
+        {% if not account or not account.offline %}
+        <div id="connection_fields">
+            <div><label>Host</label><input type="text" id="host_input" placeholder="imap.example.com" value="{{account.host if account else ''}}"/></div>
+            <div><label>Port</label><input type="number" id="port_input" min="1" max="65535" value="{{account.port if account else 993}}"/></div>
+            <div><label>SSL</label><input type="checkbox" id="ssl_input" {% if not account or account.ssl %}checked{% endif %}/></div>
+            <div><label>STARTTLS</label><input type="checkbox" id="starttls_input" {% if account and account.starttls %}checked{% endif %}/></div>
+            {% if account %}
+            <div>
+                <label>IMAP IDLE</label>
+                <input type="checkbox" id="idle_status_input" disabled aria-readonly="true" title="IMAP IDLE state is controlled automatically"/>
+                <span id="idle_status_detail">checking...</span>
+            </div>
+            {% endif %}
+            <div><label>Username</label><input type="text" id="username_input" autocomplete="username" value="{{account.username if account else ''}}"/></div>
+            <div>
+                <label>Password</label>
+                <input type="password" id="password_input" autocomplete="current-password" placeholder="{% if account %}Leave blank to keep the current password{% else %}Password{% endif %}"/>
+            </div>
+            <p>Passwords are stored in the local BringMail SQLite database. Use a dedicated application password where your mail provider supports them.</p>
+        </div>
+        {% else %}
+        <p>Mail for this account is stored only in the local BringMail database. It does not connect to a mail server.</p>
+        {% endif %}
+    </div>
+
+    {% if not account or not account.offline %}
+    <div class="group panel" id="refresh_panel">
         <h2>Refresh</h2>
+        {% if account and account.last_refresh %}
+        <p>Last refresh: {{account.last_refresh|timestamp_to_8601_local}}</p>
+        {% endif %}
         {% set interval = account.autorefresh_interval if account else 900 %}
         {% set hours = (interval / 3600)|int %}
         {% set minutes = ((interval % 3600) / 60)|int %}
         <p>Refresh this account every
-            <input type="number" id="interval_hours_input" min="0" value="{{hours}}" style="width: 4em"/> hours and
-            <input type="number" id="interval_minutes_input" min="0" max="59" value="{{minutes}}" style="width: 4em"/> minutes.
+            <input type="number" id="interval_hours_input" min="0" value="{{hours}}"/> hours and
+            <input type="number" id="interval_minutes_input" min="0" max="59" value="{{minutes}}"/> minutes.
             Set both to zero to disable automatic refresh.
         </p>
     </div>
+    {% endif %}
 
     <div class="buttons panel">
         <button id="save_button">{% if account %}Save settings{% else %}Add account{% endif %}</button>
-        {% if account %}
+        {% if account and not account.offline %}
         <button id="test_button">Test connection</button>
+        {% endif %}
+        {% if account %}
         <button id="delete_button" class="red_button button_with_confirm" data-prompt="Delete this account and its cached mail?" data-onclick="return delete_account_form(event);">Delete account</button>
         {% endif %}
-        <a href="/">Back to mail</a>
         <span id="save_message"></span>
     </div>
 

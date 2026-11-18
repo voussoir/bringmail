@@ -49,6 +49,8 @@ def get_accounts_json():
 @site.route('/accounts/refresh_all', methods=['POST'])
 def post_accounts_refresh_all():
     for account in common.bringdb.get_accounts():
+        if account.offline:
+            continue
         common.add_account_to_refresh_queue(account, manual=True)
     return flasktools.json_response({})
 
@@ -82,8 +84,39 @@ def get_account_settings(account_id):
 
 
 @site.route('/accounts/add', methods=['POST'])
-@flasktools.required_fields(['host', 'username', 'password'])
 def post_accounts_add():
+    try:
+        offline = _form_bool('offline', False)
+    except (TypeError, ValueError) as exc:
+        return _invalid(str(exc))
+
+    label = request.form.get('label')
+
+    if offline:
+        supplied = [
+            name for name in ('host', 'port', 'username', 'password')
+            if (request.form.get(name) or '').strip()
+        ]
+        if supplied:
+            return _invalid('Offline accounts cannot have IMAP connection settings.')
+
+        try:
+            with common.bringdb.transaction:
+                account = common.bringdb.add_account(
+                    label=label,
+                    offline=True,
+                )
+        except bringmail.exceptions.InvalidAccount as exc:
+            return _invalid(exc.error_message)
+        except (TypeError, ValueError) as exc:
+            return _invalid(str(exc))
+
+        common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
+        common.reconfigure_idle_supervisor()
+        return flasktools.json_response(
+            account.jsonify(folders=True, unread_count=True, pending_count=True)
+        )
+
     try:
         port = _form_int('port', 993)
         ssl = _form_bool('ssl', True)
@@ -92,10 +125,15 @@ def post_accounts_add():
     except (TypeError, ValueError) as exc:
         return _invalid(str(exc))
 
-    host = request.form['host']
-    username = request.form['username']
-    password = request.form['password']
-    label = request.form.get('label')
+    host = request.form.get('host')
+    username = request.form.get('username')
+    password = request.form.get('password')
+    if not host:
+        return _invalid('Host is required.')
+    if not username:
+        return _invalid('Username is required.')
+    if not password:
+        return _invalid('Password is required.')
 
     with common.bringdb.transaction:
         try:
@@ -111,6 +149,8 @@ def post_accounts_add():
             )
         except sqlite3.IntegrityError:
             return _invalid(f'An account for {username} at {host}:{port} already exists.')
+        except (TypeError, ValueError) as exc:
+            return _invalid(str(exc))
 
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
     common.reconfigure_idle_supervisor()
@@ -120,6 +160,44 @@ def post_accounts_add():
 @site.route('/account/<account_id>/update', methods=['POST'])
 def post_account_update(account_id):
     account = common.get_account(account_id, response_type='json')
+
+    try:
+        offline = _form_bool('offline', False) if 'offline' in request.form else None
+    except (TypeError, ValueError) as exc:
+        return _invalid(str(exc))
+
+    if account.offline:
+        if offline is True:
+            return _invalid('An account cannot be converted between online and offline.')
+        unsupported = [
+            name for name in (
+                'host',
+                'port',
+                'ssl',
+                'starttls',
+                'username',
+                'password',
+                'autorefresh_interval',
+            )
+            if name in request.form
+        ]
+        if unsupported:
+            return _invalid('Offline accounts only support label changes.')
+        try:
+            label = request.form.get('label')
+            with common.bringdb.transaction:
+                account.set_label(label)
+        except (TypeError, ValueError, bringmail.exceptions.InvalidAccount) as exc:
+            account.__reinit__()
+            if isinstance(exc, bringmail.exceptions.InvalidAccount):
+                return _invalid(exc.error_message)
+            return _invalid(str(exc))
+
+        common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
+        return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
+
+    if offline is True:
+        return _invalid('An account cannot be converted between online and offline.')
 
     try:
         if 'label' in request.form:

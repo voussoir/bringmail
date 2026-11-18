@@ -9,7 +9,7 @@ separately compiled JSON1 extension. See bringmail.exceptions.SQLiteTooOld.
 
 # Increment this when DB_INIT changes, and add a matching upgrade function in
 # bringmail/upgrades.py so existing databases can be brought forward.
-DATABASE_VERSION = 2
+DATABASE_VERSION = 3
 
 MINIMUM_SQLITE = (3, 38, 0)
 MINIMUM_SQLITE_STRING = '.'.join(str(part) for part in MINIMUM_SQLITE)
@@ -124,25 +124,73 @@ SPECIAL_USES = (
     SPECIAL_USE_ARCHIVE,
 )
 
+# Offline accounts are local-only mailboxes with this fixed folder set. They
+# are created with the account and re-created by the offline IMAP mock if a
+# record is missing.
+OFFLINE_INBOX_NAME = 'INBOX'
+OFFLINE_TRASH_NAME = 'Trash'
+OFFLINE_FOLDER_DELIMITER = '/'
+OFFLINE_UIDVALIDITY = 1
+OFFLINE_UIDNEXT = 1
+
 VERSION = '0.0.1'
 
-DB_INIT = f'''
-CREATE TABLE IF NOT EXISTS accounts(
+# The accounts table is defined separately so the version 2 -> 3 migration can
+# rebuild it with the same definition. {table} is replaced with the real or
+# temporary table name.
+DB_ACCOUNTS_TABLE = '''
+CREATE TABLE IF NOT EXISTS {table}(
     id INTEGER PRIMARY KEY,
+    offline BOOLEAN NOT NULL DEFAULT 0,
     label TEXT,
-    host TEXT NOT NULL,
-    port INT NOT NULL,
+    host TEXT,
+    port INT,
     ssl BOOLEAN NOT NULL,
     starttls BOOLEAN NOT NULL,
-    username TEXT NOT NULL,
-    password TEXT NOT NULL,
+    username TEXT,
+    password TEXT,
     autorefresh_interval INT NOT NULL,
     ui_order_rank REAL NOT NULL,
     created INT NOT NULL,
     last_refresh INT NOT NULL,
     last_refresh_attempt INT NOT NULL,
-    last_refresh_error TEXT
-);
+    last_refresh_error TEXT,
+    CONSTRAINT accounts_offline_connection CHECK (
+        (
+            offline = 0 AND
+            host IS NOT NULL AND
+            port IS NOT NULL AND
+            username IS NOT NULL AND
+            password IS NOT NULL
+        )
+        OR
+        (
+            offline = 1 AND
+            host IS NULL AND
+            port IS NULL AND
+            username IS NULL AND
+            password IS NULL
+        )
+    )
+)
+'''
+
+# Kept out of DB_INIT because first-time setup executes DB_INIT statement by
+# statement on semicolons, and a trigger body contains its own semicolons.
+DB_TRIGGERS = (
+    '''
+CREATE TRIGGER IF NOT EXISTS accounts_offline_immutable
+BEFORE UPDATE OF offline ON accounts
+FOR EACH ROW
+WHEN NEW.offline != OLD.offline
+BEGIN
+    SELECT RAISE(ABORT, 'An account cannot be converted between online and offline.');
+END
+''',
+)
+
+DB_INIT = f'''
+{DB_ACCOUNTS_TABLE.format(table='accounts')};
 CREATE UNIQUE INDEX IF NOT EXISTS index_accounts_endpoint
     ON accounts(host, port, username);
 CREATE INDEX IF NOT EXISTS index_accounts_ui_order_rank

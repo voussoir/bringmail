@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -84,13 +85,13 @@ class UpgradeTest(unittest.TestCase):
             db.close()
 
         report = upgrades.upgrade_all(data_directory=self.tempdir.name)
-        self.assertEqual(report.pending, (2,))
-        self.assertEqual(report.applied, (2,))
+        self.assertEqual(report.pending, (2, 3))
+        self.assertEqual(report.applied, (2, 3))
         self.assertIsNotNone(report.backup)
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), 2)
+            self.assertEqual(db.pragma_read('user_version'), 3)
             tables = [
                 row['name']
                 for row in db.select("SELECT name FROM sqlite_master WHERE type == 'table'")
@@ -109,6 +110,109 @@ class UpgradeTest(unittest.TestCase):
             self.assertIn('index_pending_ops_message', indexes)
             self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM messages'), 1)
             self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM pending_operations'), 0)
+        finally:
+            db.close()
+
+    def test_upgrade_2_to_3_adds_offline_account_support(self):
+        self.make_database()
+
+        db = self.open_database()
+        try:
+            account_id = db.select_one_value('SELECT id FROM accounts')
+            db.sql_write.execute('PRAGMA foreign_keys = OFF')
+            with db.transaction:
+                db.execute('DROP TABLE accounts')
+                db.execute('''
+                CREATE TABLE accounts(
+                    id INTEGER PRIMARY KEY,
+                    label TEXT,
+                    host TEXT NOT NULL,
+                    port INT NOT NULL,
+                    ssl BOOLEAN NOT NULL,
+                    starttls BOOLEAN NOT NULL,
+                    username TEXT NOT NULL,
+                    password TEXT NOT NULL,
+                    autorefresh_interval INT NOT NULL,
+                    ui_order_rank REAL NOT NULL,
+                    created INT NOT NULL,
+                    last_refresh INT NOT NULL,
+                    last_refresh_attempt INT NOT NULL,
+                    last_refresh_error TEXT
+                )
+                ''')
+                db.execute(
+                    '''
+                    INSERT INTO accounts (
+                        id, label, host, port, ssl, starttls, username,
+                        password, autorefresh_interval, ui_order_rank, created,
+                        last_refresh, last_refresh_attempt, last_refresh_error
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    [
+                        account_id,
+                        'Test',
+                        'imap.example.com',
+                        993,
+                        1,
+                        0,
+                        'user@example.com',
+                        'hunter2',
+                        900,
+                        1,
+                        1,
+                        0,
+                        0,
+                        None,
+                    ],
+                )
+                db.pragma_write('user_version', 2)
+        finally:
+            db.close()
+
+        report = upgrades.upgrade_all(data_directory=self.tempdir.name)
+        self.assertEqual(report.pending, (3,))
+        self.assertEqual(report.applied, (3,))
+
+        db = self.open_database()
+        try:
+            self.assertEqual(db.pragma_read('user_version'), 3)
+            columns = {
+                row['name']: row
+                for row in db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
+            }
+            self.assertIn('offline', columns)
+            self.assertEqual(columns['offline']['dflt_value'], '0')
+            self.assertEqual(columns['host']['notnull'], 0)
+            self.assertEqual(columns['port']['notnull'], 0)
+            self.assertEqual(columns['username']['notnull'], 0)
+            self.assertEqual(columns['password']['notnull'], 0)
+
+            triggers = [
+                row['name']
+                for row in db.select("SELECT name FROM sqlite_master WHERE type == 'trigger'")
+            ]
+            self.assertIn('accounts_offline_immutable', triggers)
+
+            indexes = [
+                row['name']
+                for row in db.select("SELECT name FROM sqlite_master WHERE type == 'index'")
+            ]
+            self.assertIn('index_accounts_endpoint', indexes)
+
+            account = db.get_account(account_id)
+            self.assertFalse(account.offline)
+            self.assertEqual(account.host, 'imap.example.com')
+            self.assertEqual(account.username, 'user@example.com')
+            self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM folders'), 1)
+            self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM messages'), 1)
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                with db.transaction:
+                    db.execute(
+                        'UPDATE accounts SET offline = 1 WHERE id == ?',
+                        [account_id],
+                    )
         finally:
             db.close()
 

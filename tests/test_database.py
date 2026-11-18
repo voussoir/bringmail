@@ -317,6 +317,149 @@ class DatabaseTest(unittest.TestCase):
         with self.assertRaises(exceptions.NoSuchAccount):
             self.db.get_account(account.id)
 
+    def test_offline_account_has_local_fields_and_folders(self):
+        with self.db.transaction:
+            account = self.db.add_account(
+                label='Offline archive',
+                offline=True,
+            )
+
+        self.assertTrue(account.offline)
+        self.assertEqual(account.label, 'Offline archive')
+        self.assertIsNone(account.host)
+        self.assertIsNone(account.port)
+        self.assertIsNone(account.username)
+        self.assertIsNone(account.password)
+        self.assertFalse(account.ssl)
+        self.assertFalse(account.starttls)
+        self.assertEqual(account.autorefresh_interval, 0)
+        self.assertEqual(account.next_refresh, float('inf'))
+
+        folders = {folder.name: folder for folder in account.get_folders()}
+        self.assertEqual(set(folders), {'INBOX', 'Trash'})
+        self.assertEqual(
+            folders['INBOX'].special_use,
+            constants.SPECIAL_USE_INBOX,
+        )
+        self.assertEqual(
+            folders['Trash'].special_use,
+            constants.SPECIAL_USE_TRASH,
+        )
+        self.assertEqual(
+            folders['INBOX'].uidvalidity,
+            constants.OFFLINE_UIDVALIDITY,
+        )
+        self.assertEqual(
+            folders['Trash'].uidvalidity,
+            constants.OFFLINE_UIDVALIDITY,
+        )
+        self.assertEqual(account.get_trash_folder().id, folders['Trash'].id)
+        self.assertTrue(account.jsonify()['offline'])
+
+    def test_offline_account_requires_label(self):
+        for label in (None, '', '   '):
+            with self.assertRaises(exceptions.InvalidAccount):
+                with self.db.transaction:
+                    self.db.add_account(label=label, offline=True)
+
+    def test_offline_account_rejects_connection_fields(self):
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.add_account(
+                    label='Offline',
+                    offline=True,
+                    host='imap.example.com',
+                )
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.add_account(
+                    label='Offline',
+                    offline=True,
+                    port=993,
+                )
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.add_account(
+                    label='Offline',
+                    offline=True,
+                    username='user@example.com',
+                )
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                self.db.add_account(
+                    label='Offline',
+                    offline=True,
+                    password='hunter2',
+                )
+
+    def test_database_enforces_offline_connection_shape(self):
+        online = self.make_account()
+        with self.db.transaction:
+            offline = self.db.add_account(label='Offline', offline=True)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction:
+                self.db.execute(
+                    'UPDATE accounts SET host = NULL WHERE id == ?',
+                    [online.id],
+                )
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction:
+                self.db.execute(
+                    "UPDATE accounts SET host = 'imap.example.com' WHERE id == ?",
+                    [offline.id],
+                )
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction:
+                self.db.execute(
+                    'UPDATE accounts SET username = NULL WHERE id == ?',
+                    [online.id],
+                )
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction:
+                self.db.execute(
+                    "UPDATE accounts SET password = 'x' WHERE id == ?",
+                    [offline.id],
+                )
+
+    def test_database_prevents_offline_conversion(self):
+        online = self.make_account()
+        with self.db.transaction:
+            offline = self.db.add_account(label='Offline', offline=True)
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction:
+                self.db.execute(
+                    'UPDATE accounts SET offline = 1 WHERE id == ?',
+                    [online.id],
+                )
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.db.transaction:
+                self.db.execute(
+                    'UPDATE accounts SET offline = 0 WHERE id == ?',
+                    [offline.id],
+                )
+
+    def test_offline_account_rejects_online_setters(self):
+        with self.db.transaction:
+            offline = self.db.add_account(label='Offline', offline=True)
+
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                offline.set_server(host='imap.example.com', port=993, ssl=True, starttls=False)
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                offline.set_username('user@example.com')
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                offline.set_password('hunter2')
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                offline.set_autorefresh_interval(900)
+        with self.assertRaises(exceptions.InvalidAccount):
+            with self.db.transaction:
+                offline.set_label(None)
+
 
 if __name__ == '__main__':
     unittest.main()

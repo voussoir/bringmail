@@ -133,6 +133,108 @@ class FlaskTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Themes:', response.data)
 
+    def test_account_add_page_has_offline_checkbox_first(self):
+        response = self.client.get('/account/add')
+        self.assertEqual(response.status_code, 200)
+        data = response.data
+        connection_index = data.index(b'<h2>Connection</h2>')
+        offline_index = data.index(b'id="offline_input"')
+        host_index = data.index(b'id="host_input"')
+        self.assertLess(connection_index, offline_index)
+        self.assertLess(offline_index, host_index)
+        self.assertIn(b'id="connection_fields"', data)
+        self.assertIn(b'id="refresh_panel"', data)
+
+    def test_online_account_settings_hide_offline_checkbox(self):
+        response = self.client.get(f'/account/{self.account.id}/settings')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b'id="offline_input"', response.data)
+        self.assertIn(b'id="host_input"', response.data)
+        self.assertIn(b'id="refresh_panel"', response.data)
+        self.assertIn(b'id="test_button"', response.data)
+
+    def test_create_offline_account_and_edit_settings(self):
+        response = self.client.post(
+            '/accounts/add',
+            data={'offline': 'true', 'label': 'Local archive'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['offline'])
+        self.assertEqual(data['label'], 'Local archive')
+        self.assertIsNone(data['host'])
+        self.assertIsNone(data['port'])
+        self.assertIsNone(data['username'])
+        self.assertEqual(data['autorefresh_interval'], 0)
+        self.assertEqual(
+            {folder['name'] for folder in data['folders']},
+            {'INBOX', 'Trash'},
+        )
+        account_id = data['id']
+
+        response = self.client.get(f'/account/{account_id}/settings')
+        self.assertEqual(response.status_code, 200)
+        page = response.data
+        self.assertIn(b'id="offline_input" checked disabled', page)
+        self.assertNotIn(b'id="host_input"', page)
+        self.assertNotIn(b'id="password_input"', page)
+        self.assertNotIn(b'id="username_input"', page)
+        self.assertNotIn(b'id="interval_hours_input"', page)
+        self.assertNotIn(b'id="refresh_panel"', page)
+        self.assertNotIn(b'id="test_button"', page)
+        self.assertIn(b'id="delete_button"', page)
+        self.assertIn(b'Inbox', page)
+        self.assertIn(b'Trash', page)
+
+        response = self.client.post(
+            f'/account/{account_id}/update',
+            data={'label': 'Renamed archive'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['label'], 'Renamed archive')
+
+        response = self.client.post(
+            f'/account/{account_id}/update',
+            data={'offline': 'true'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            f'/account/{account_id}/update',
+            data={'host': 'imap.example.com'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_offline_account_add_validation(self):
+        response = self.client.post(
+            '/accounts/add',
+            data={'offline': 'true'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            '/accounts/add',
+            data={
+                'offline': 'true',
+                'label': 'Offline',
+                'host': 'imap.example.com',
+            },
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post(
+            f'/account/{self.account.id}/update',
+            data={'offline': 'true'},
+            headers={'X-BringMail-Request': '1'},
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_static_assets(self):
         for path in (
                 '/static/css/common.css',

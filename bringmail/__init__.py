@@ -5,5 +5,6 @@ from . import helpers
 from . import idle
 from . import idle_supervisor
 from . import objects
+from . import offline
 from . import outbox
 from . import upgrades

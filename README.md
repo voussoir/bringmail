@@ -38,6 +38,10 @@ Features
   copies the cached raw message with IMAP APPEND and moves the source to Trash
   only after the copy succeeds. If the source account has no selectable Trash,
   the transfer becomes a copy and the source message remains.
+- Offline accounts provide local-only mail storage with no IMAP server. They
+  have an ID, a settings page, and a fixed Inbox and Trash. Drag messages into
+  an offline account with the same cross-account procedure used for online
+  accounts. Offline accounts cannot be converted to or from online accounts.
 - Offline queueing of read/unread, move, delete, and undo. Actions are recorded
   in the local database and replayed when the connection returns; see
   "Offline actions" below.
@@ -105,9 +109,16 @@ from which you run the launcher. The directory contains `bringmail.db`.
 
    You will be prompted for the password unless you pass `--password`.
 
+   To create an offline account instead, use the Label field on the Add
+   Account page and check "Offline Account", or run:
+
+       python D:\Git\BringMail\frontends\bringmail_cli.py add_account --offline --label "Local archive"
+
 The account settings page accepts the IMAP host, port, SSL/STARTTLS choice,
 username, password, and autorefresh interval. The password field is write-only:
-leaving it blank keeps the existing password.
+leaving it blank keeps the existing password. For an offline account, the
+settings page shows only the checked Offline Account box, the label, and the
+folder list; the Connection and Refresh options are not available.
 
 Security
 --------
@@ -164,8 +175,10 @@ Database
 
 The `_bringmail/bringmail.db` schema has four tables:
 
-- `accounts`: IMAP endpoint, username, password, refresh interval, and last
-  refresh state.
+- `accounts`: online/offline marker, IMAP endpoint, username, password, refresh
+  interval, and last refresh state. Offline accounts store NULL in the host,
+  port, username, and password columns; a CHECK constraint enforces that shape
+  and a trigger prevents converting an account between the two kinds.
 - `folders`: IMAP folder names, hierarchy metadata, special-use flags, and the
   UIDVALIDITY/UIDNEXT/HIGHESTMODSEQ synchronization checkpoint.
 - `messages`: one self-contained row per message, with the compressed RFC822
@@ -233,6 +246,34 @@ same background worker that performs refreshes.
   private flags are applied unconditionally.
 
 
+Offline accounts
+----------------
+
+An offline account is a purely local mailbox. It has an ID, a required label,
+and a settings page, but it has no host, port, username, password, refresh
+interval, or IMAP IDLE watcher. It always contains an Inbox and a Trash,
+created with the account and re-created by the local folder discovery if a
+record is missing.
+
+The sync engine, message actions, and outbox treat an offline account like an
+online one because `bringmail/offline.py` implements the IMAP calls against the
+local database. Reads and flag changes update the cache directly; deletes and
+moves change the local folder rows; an APPEND from another account inserts a
+new local message. No socket is opened.
+
+Dragging a message from an online account into an offline account follows the
+normal cross-account path: the source account flushes its queue, APPENDs the
+cached raw message to the offline destination, and then moves the source to
+its own Trash. Dragging from an offline account to another account APPENDs to
+the destination and, after the copy succeeds, deletes the local offline row so
+the message really leaves the offline account. This applies to messages in the
+offline Inbox and in the offline Trash.
+
+Offline accounts cannot be converted to online accounts, or the reverse. The
+database enforces this with a CHECK constraint and an update trigger, and the
+HTTP API rejects conversion attempts.
+
+
 Upgrading an existing database
 ------------------------------
 
@@ -269,8 +310,9 @@ The tests cover message parsing, generated-column queries, local flags,
 pagination, incremental and targeted fake-IMAP sync, UIDVALIDITY resets,
 reusable IMAP sessions, IMAP IDLE sessions and watchers, the offline pending
 queue (consolidation, conditional flag writes, conflicts, backoff), cross-account
-APPEND transfers and copy-only fallbacks, database schema upgrades, and the Flask
-routes. They do not contact a real mail server.
+APPEND transfers and copy-only fallbacks, offline accounts and their local
+IMAP emulation, database schema upgrades, and the Flask routes. They do not
+contact a real mail server.
 
 Architecture
 ------------
@@ -279,7 +321,8 @@ Architecture
   Message; `bringmaildb.py` contains the database, IMAP sync engine, and the
   outbox flush; `outbox.py` contains the pending-operation consolidation rules;
   `helpers.py` contains MIME parsing, sanitization, IMAP connection/session
-  handling, and conditional STORE; `idle.py` contains the IDLE protocol
+  handling, and conditional STORE; `offline.py` contains the local IMAP
+  emulation for offline accounts; `idle.py` contains the IDLE protocol
   session; `idle_supervisor.py` contains the reusable watcher threads and
   reconciliation. Frontends start the supervisor explicitly; importing the
   package does not start any threads. `upgrades.py` contains the schema

@@ -11,6 +11,7 @@ if REPO_ROOT not in sys.path:
 from bringmail import bringmaildb
 from bringmail import constants
 from bringmail import exceptions
+from bringmail import helpers
 from bringmail import objects
 from bringmail import outbox
 
@@ -37,7 +38,7 @@ class FakeFlushClient:
         return {b'UIDVALIDITY': self.uidvalidity, b'UIDNEXT': 2}
 
     def has_capability(self, capability):
-        return self.condstore and capability == 'CONDSTORE'
+        return self.condstore and capability in ('CONDSTORE', 'MOVE')
 
     def capabilities(self):
         return (b'IMAP4rev1', b'CONDSTORE')
@@ -251,6 +252,35 @@ class PendingQueueTest(unittest.TestCase):
         self.db.caches[objects.Message].clear()
         self.message = self.db.get_message(self.message.id)
         return raw
+
+    def _add_offline_account(self, label='Offline'):
+        with self.db.transaction:
+            return self.db.add_account(label=label, offline=True)
+
+    def _add_offline_message(self, account):
+        raw = (
+            b'From: offline-sender@example.com\r\n'
+            b'To: recipient@example.com\r\n'
+            b'Subject: offline test\r\n'
+            b'Message-ID: <offline-test@example.com>\r\n'
+            b'Date: Thu, 01 Jan 2026 00:00:00 +0000\r\n'
+            b'\r\n'
+            b'Offline body text.\r\n'
+        )
+        (parsed, meta) = helpers.parse_full_message(raw, size=len(raw))
+        inbox = self.db.get_folder_by_name(account, constants.OFFLINE_INBOX_NAME)
+        with self.db.transaction:
+            message = self.db.add_message(
+                account=account,
+                folder=inbox,
+                uid=1,
+                uidvalidity=inbox.uidvalidity,
+                raw=raw,
+                meta=meta,
+                size=len(raw),
+                flags={'seen': False},
+            )
+        return (message, raw)
 
     def test_queue_move_to_account_records_operation(self):
         (destination_account, destination_folder, destination_trash) = (
@@ -689,6 +719,150 @@ class PendingQueueTest(unittest.TestCase):
         self.assertEqual(
             self.db.get_pending_operation(operation.id).state,
             constants.PENDING_STATE_SUPERSEDED,
+        )
+
+    def test_offline_flags_delete_and_restore_flush_locally(self):
+        offline = self._add_offline_account()
+        (message, _raw) = self._add_offline_message(offline)
+        inbox = self.db.get_folder_by_name(offline, constants.OFFLINE_INBOX_NAME)
+        trash = self.db.get_folder_by_name(offline, constants.OFFLINE_TRASH_NAME)
+
+        self.assertTrue(message.queue_seen(True))
+        summary = self.db.flush_pending(offline)
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(summary['failed'], 0)
+        self.assertEqual(summary['conflicted'], 0)
+
+        message = self.db.get_message(message.id)
+        self.assertTrue(message.seen)
+        self.assertEqual(
+            self.db.get_pending_for_message(message.id)[0].state,
+            constants.PENDING_STATE_SENT,
+        )
+
+        self.assertTrue(message.queue_delete())
+        self.assertTrue(message.local_deleted)
+        summary = self.db.flush_pending(offline)
+        self.assertEqual(summary['sent'], 1)
+
+        message = self.db.get_message(message.id)
+        self.assertEqual(message.folder_id, trash.id)
+        self.assertFalse(message.local_deleted)
+
+        self.assertTrue(message.queue_restore())
+        summary = self.db.flush_pending(offline)
+        self.assertEqual(summary['sent'], 1)
+
+        message = self.db.get_message(message.id)
+        self.assertEqual(message.folder_id, inbox.id)
+        self.assertFalse(message.local_deleted)
+
+    def test_online_to_offline_transfer_creates_local_copy(self):
+        offline = self._add_offline_account()
+        offline_inbox = self.db.get_folder_by_name(
+            offline,
+            constants.OFFLINE_INBOX_NAME,
+        )
+        raw = self._set_message_body()
+        result = self.message.queue_move_to_account(offline_inbox)
+        self.assertFalse(result.copy_only)
+        self.assertEqual(result.operation, constants.OPERATION_MOVE_ACCOUNT)
+
+        source_client = FakeFlushClient()
+        (summary, source_client) = self._flush(client=source_client)
+
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(summary['refresh_folder_ids'], [offline_inbox.id])
+        self.assertEqual(source_client.move_calls, [([1], self.trash.name)])
+
+        messages = self.db.get_messages(folder=offline_inbox, limit=10)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].subject, 'test')
+        self.assertEqual(messages[0].message_id, '<test@example.com>')
+        self.assertEqual(
+            self.db.decompress_raw(messages[0].raw, messages[0].raw_codec),
+            raw,
+        )
+
+    def test_offline_to_online_transfer_removes_local_source(self):
+        offline = self._add_offline_account()
+        (message, raw) = self._add_offline_message(offline)
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        result = message.queue_move_to_account(destination_folder)
+        self.assertFalse(result.copy_only)
+        self.assertEqual(result.operation, constants.OPERATION_MOVE_ACCOUNT)
+
+        destination_client = FakeFlushClient()
+        destination_client.search_results = []
+        with mock.patch(
+                'bringmail.helpers.imap_call',
+                side_effect=lambda account, function: function(destination_client)):
+            summary = self.db.flush_pending(offline)
+
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(summary['refresh_folder_ids'], [destination_folder.id])
+        self.assertEqual(len(destination_client.append_calls), 1)
+        (folder_name, appended_raw, _flags, _msg_time) = destination_client.append_calls[0]
+        self.assertEqual(folder_name, destination_folder.name)
+        self.assertEqual(appended_raw, raw)
+
+        with self.assertRaises(exceptions.NoSuchMessage):
+            self.db.get_message(message.id)
+        self.assertEqual(
+            self.db.get_pending_for_message(message.id)[0].state,
+            constants.PENDING_STATE_SENT,
+        )
+
+    def test_offline_trash_to_online_transfer_removes_local_source(self):
+        offline = self._add_offline_account()
+        (message, raw) = self._add_offline_message(offline)
+        trash = self.db.get_folder_by_name(
+            offline,
+            constants.OFFLINE_TRASH_NAME,
+        )
+        with self.db.transaction:
+            self.db.update(
+                table=objects.Message,
+                pairs={
+                    'id': message.id,
+                    'folder_id': trash.id,
+                    'uid': 1,
+                    'uidvalidity': trash.uidvalidity,
+                },
+                where_key='id',
+            )
+        self.db.caches[objects.Message].clear()
+        message = self.db.get_message(message.id)
+        self.assertEqual(message.folder_id, trash.id)
+
+        (destination_account, destination_folder, destination_trash) = (
+            self._add_destination_account()
+        )
+        result = message.queue_move_to_account(destination_folder)
+        self.assertFalse(result.copy_only)
+        self.assertEqual(result.operation, constants.OPERATION_MOVE_ACCOUNT)
+
+        destination_client = FakeFlushClient()
+        destination_client.search_results = []
+        with mock.patch(
+                'bringmail.helpers.imap_call',
+                side_effect=lambda account, function: function(destination_client)):
+            summary = self.db.flush_pending(offline)
+
+        self.assertEqual(summary['sent'], 1)
+        self.assertEqual(summary['refresh_folder_ids'], [destination_folder.id])
+        self.assertEqual(len(destination_client.append_calls), 1)
+        (folder_name, appended_raw, _flags, _msg_time) = destination_client.append_calls[0]
+        self.assertEqual(folder_name, destination_folder.name)
+        self.assertEqual(appended_raw, raw)
+
+        with self.assertRaises(exceptions.NoSuchMessage):
+            self.db.get_message(message.id)
+        self.assertEqual(
+            self.db.get_pending_for_message(message.id)[0].state,
+            constants.PENDING_STATE_SENT,
         )
 
 

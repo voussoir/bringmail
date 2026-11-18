@@ -410,6 +410,9 @@ class IdleSupervisor:
             return desired
 
         for account in accounts:
+            if account.offline:
+                # Offline accounts have no network connection to watch.
+                continue
             try:
                 folder = find_inbox_folder(account)
             except Exception:

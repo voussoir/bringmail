@@ -32,6 +32,23 @@ def init_argparse(args):
 
 def add_account_argparse(args):
     database = load_bringdb()
+
+    if args.offline:
+        if not args.label:
+            pipeable.stderr('An offline account requires --label.')
+            return 1
+        with database.transaction:
+            account = database.add_account(
+                label=args.label,
+                offline=True,
+            )
+        pipeable.stdout(f'Added {account}.')
+        return 0
+
+    if not args.host or not args.username:
+        pipeable.stderr('An online account requires --host and --username.')
+        return 1
+
     password = args.password
     if password is None:
         password = getpass.getpass(f'Password for {args.username}: ')
@@ -55,6 +72,12 @@ def list_accounts_argparse(args):
     database = load_bringdb()
     for account in database.get_accounts():
         unread = account.get_unread_count()
+        if account.offline:
+            pipeable.stdout(
+                f'{account.id} | {account.display_name} | offline | '
+                f'unread={unread}'
+            )
+            continue
         pipeable.stdout(
             f'{account.id} | {account.display_name} | {account.username} | '
             f'{account.host}:{account.port} | interval={account.autorefresh_interval} | '
@@ -99,8 +122,9 @@ def main(argv):
     p_init.set_defaults(func=init_argparse)
 
     p_add = subparsers.add_parser('add_account', aliases=['add-account'])
-    p_add.add_argument('--host', required=True)
-    p_add.add_argument('--username', required=True)
+    p_add.add_argument('--offline', action='store_true')
+    p_add.add_argument('--host', default=None)
+    p_add.add_argument('--username', default=None)
     p_add.add_argument('--password', default=None)
     p_add.add_argument('--label', default=None)
     p_add.add_argument('--port', type=int, default=993)

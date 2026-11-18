@@ -113,6 +113,17 @@ class IdleSupervisorTest(unittest.TestCase):
             [self.account.id],
         )
 
+    def test_skips_offline_account(self):
+        with self.db.transaction:
+            self.db.add_account(label='Offline', offline=True)
+
+        self.supervisor.start()
+
+        self.assertEqual(
+            [watcher.snapshot.id for watcher in FakeWatcher.instances],
+            [self.account.id],
+        )
+
     def test_reconfigure_keeps_matching_watcher(self):
         self.supervisor.start()
         watcher = FakeWatcher.instances[0]

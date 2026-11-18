@@ -34,7 +34,15 @@ def _loads_json(value, default):
         return default
 
 
-def move_message_on_server(client, *, source_name, destination_name, uid, message_id=None):
+def move_message_on_server(
+        client,
+        *,
+        source_name,
+        destination_name,
+        uid,
+        message_id=None,
+        allow_copy_fallback=True,
+):
     '''
     Move one message between two folders on an already-authenticated client.
 
@@ -42,6 +50,12 @@ def move_message_on_server(client, *, source_name, destination_name, uid, messag
     and REPL) and by the outbox flush. Returns (new_uid, new_uidvalidity,
     uid_source), where uid_source is 'copyuid' or 'search'. new_uid may be
     None when the new UID could not be discovered.
+
+    allow_copy_fallback:
+        When the server does not support MOVE, callers normally want COPY plus
+        \\Deleted plus EXPUNGE. A caller that has already verified the server
+        advertises MOVE can pass False so a failed MOVE is reported instead of
+        silently turning into a copy.
     '''
     client.select_folder(source_name, readonly=False)
 
@@ -53,6 +67,8 @@ def move_message_on_server(client, *, source_name, destination_name, uid, messag
     try:
         response = client.move([uid], destination_name)
     except Exception:
+        if not allow_copy_fallback:
+            raise
         response = client.copy([uid], destination_name)
         copyuid = helpers.copyuid_from_response(
             client,
@@ -160,6 +176,7 @@ class Account(ObjectBase):
         super().__init__(bringmaildb)
 
         self.id = db_row['id']
+        self.offline = bool(_row_get(db_row, 'offline', 0))
         self.label = db_row['label']
         self.host = db_row['host']
         self.port = db_row['port']
@@ -179,7 +196,17 @@ class Account(ObjectBase):
 
     @property
     def display_name(self):
-        return self.label or self.username or self.host or str(self.id)
+        if self.label:
+            return self.label
+        if self.offline:
+            return f'Offline account {self.id}'
+        return self.username or self.host or str(self.id)
+
+    def _assert_online(self, description):
+        if self.offline:
+            raise exceptions.InvalidAccount(
+                f'Offline accounts do not have {description}.'
+            )
 
     @staticmethod
     def normalize_autorefresh_interval(autorefresh_interval):
@@ -293,6 +320,7 @@ class Account(ObjectBase):
         j = {
             'type': 'account',
             'id': self.id,
+            'offline': self.offline,
             'label': self.label,
             'display_name': self.display_name,
             'host': self.host,
@@ -354,6 +382,7 @@ class Account(ObjectBase):
     @worms.atomic
     def set_autorefresh_interval(self, autorefresh_interval):
         self.assert_not_deleted()
+        self._assert_online('an automatic refresh interval')
         autorefresh_interval = self.normalize_autorefresh_interval(autorefresh_interval)
         pairs = {'id': self.id, 'autorefresh_interval': autorefresh_interval}
         self.bringmaildb.update(table=Account, pairs=pairs, where_key='id')
@@ -363,6 +392,8 @@ class Account(ObjectBase):
     def set_label(self, label):
         self.assert_not_deleted()
         label = self.normalize_label(label)
+        if self.offline and label is None:
+            raise exceptions.InvalidAccount('An offline account requires a label.')
         pairs = {'id': self.id, 'label': label}
         self.bringmaildb.update(table=Account, pairs=pairs, where_key='id')
         self.label = label
@@ -370,6 +401,7 @@ class Account(ObjectBase):
     @worms.atomic
     def set_password(self, password):
         self.assert_not_deleted()
+        self._assert_online('a password')
         password = self.normalize_password(password)
         pairs = {'id': self.id, 'password': password}
         self.bringmaildb.update(table=Account, pairs=pairs, where_key='id')
@@ -378,6 +410,7 @@ class Account(ObjectBase):
     @worms.atomic
     def set_server(self, *, host, port, ssl, starttls):
         self.assert_not_deleted()
+        self._assert_online('IMAP server settings')
         host = self.normalize_host(host)
         port = self.normalize_port(port)
         ssl = self.normalize_ssl(ssl)
@@ -398,6 +431,7 @@ class Account(ObjectBase):
     @worms.atomic
     def set_username(self, username):
         self.assert_not_deleted()
+        self._assert_online('a username')
         username = self.normalize_username(username)
         pairs = {'id': self.id, 'username': username}
         self.bringmaildb.update(table=Account, pairs=pairs, where_key='id')
@@ -833,6 +867,10 @@ class Message(ObjectBase):
         the raw message with APPEND and only then moves the source to Trash.
         When the source account has no usable Trash folder, the operation is
         copy-only and the source is left in place.
+
+        An offline source is always a true local move: after the destination
+        copy succeeds, the local source row is removed. This applies even when
+        the message is currently in the offline account's Trash.
         '''
         self.assert_not_deleted()
         if not isinstance(folder, Folder):
@@ -860,12 +898,18 @@ class Message(ObjectBase):
             )
 
         base_folder_id = self._virtual_folder_id()
-        trash = self.account.get_trash_folder()
-        copy_only = (
-            trash is None or
-            not trash.is_selectable or
-            base_folder_id == trash.id
-        )
+        if self.account.offline:
+            # Moving a message out of an offline account is always a true
+            # local move. There is no server-side Trash step to emulate, and
+            # this applies whether the source is Inbox or Trash.
+            copy_only = False
+        else:
+            trash = self.account.get_trash_folder()
+            copy_only = (
+                trash is None or
+                not trash.is_selectable or
+                base_folder_id == trash.id
+            )
         operation_kind = (
             constants.OPERATION_COPY_ACCOUNT
             if copy_only
