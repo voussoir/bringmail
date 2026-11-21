@@ -198,7 +198,7 @@ function set_unread_span(element, count)
 function update_tab_title(total_unread)
 {
     const count = Math.max(0, total_unread || 0);
-    document.title = count > 0 ? `${BASE_TAB_TITLE} (${count})` : BASE_TAB_TITLE;
+    document.title = count > 0 ? `(${count}) ${BASE_TAB_TITLE}` : BASE_TAB_TITLE;
 }
 
 function account_icon(account)
