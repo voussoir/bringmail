@@ -8,7 +8,8 @@ separately compiled JSON1 extension. See bringmail.exceptions.SQLiteTooOld.
 '''
 
 # Increment this when DB_INIT changes, and add a matching upgrade function in
-# bringmail/upgrades.py so existing databases can be brought forward.
+# bringmail/upgrades.py so existing databases can be brought forward. The
+# upgrades module keeps its own copy of this number, so increment both.
 DATABASE_VERSION = 3
 
 MINIMUM_SQLITE = (3, 38, 0)
@@ -135,9 +136,9 @@ OFFLINE_UIDNEXT = 1
 
 VERSION = '0.0.1'
 
-# The accounts table is defined separately so the version 2 -> 3 migration can
-# rebuild it with the same definition. {table} is replaced with the real or
-# temporary table name.
+# The accounts table is defined separately so DB_INIT can interpolate it.
+# {table} is replaced with the real table name. The version 2 -> 3 migration
+# uses its own frozen copy in bringmail/upgrades.py rather than this one.
 DB_ACCOUNTS_TABLE = '''
 CREATE TABLE IF NOT EXISTS {table}(
     id INTEGER PRIMARY KEY,

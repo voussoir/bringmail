@@ -3,12 +3,12 @@ Database schema upgrades for BringMail.
 
 BringMail stores its schema version in SQLite's PRAGMA user_version. This
 module applies the version-to-version migrations that bring an existing
-database up to constants.DATABASE_VERSION.
+database up to this module's DATABASE_VERSION.
 
 Adding a migration
 ------------------
 1. Change the schema in constants.DB_INIT.
-2. Increment constants.DATABASE_VERSION.
+2. Increment DATABASE_VERSION here and constants.DATABASE_VERSION.
 3. Add a function here, for example:
 
     @upgrade_function(1, 2)
@@ -18,15 +18,26 @@ Adding a migration
 Use migrator.add_column() for simple column additions. Use
 migrator.rebuild_table() when SQLite cannot perform the change in place, such
 as adding a STORED generated column, changing a column type, or changing a
-collation. Use the Migrator's SQL helpers rather than ORM object methods,
-because the database's column index is loaded before migrations run. Add a
-test in tests/test_upgrades.py for every migration.
+collation. A rebuild drops the table's indices and triggers, so pass the
+definitions that should exist afterwards to migrator.create_indices and
+migrator.create_triggers. Use the Migrator's SQL helpers rather than ORM object
+methods, because the database's column index is loaded before migrations run.
+Add a test in tests/test_upgrades.py for every migration.
+
+Schema snapshots
+----------------
+This module keeps frozen copies of the SQL it needs instead of reading them
+from constants. A migration describes the schema of the version it produces,
+so it must not see the head definition: once the head moves on, upgrade_2_to_3
+would build the newer accounts table and the following step would find that its
+work was already done. Every copy is frozen at the version that introduced it
+and must not be edited afterwards.
 
 The upgrade functions run with foreign key enforcement disabled and inside one
-transaction per version. Indices from constants.DB_INIT and triggers from
-constants.DB_TRIGGERS are recreated, and PRAGMA foreign_key_check is run before
-each version is committed. A migration function must not commit or start its
-own transaction.
+transaction per version. A migration that rebuilds a table recreates the
+indices and triggers it needs, passing their definitions to the Migrator.
+PRAGMA foreign_key_check is run before each version is committed. A migration
+function must not commit or start its own transaction.
 '''
 import dataclasses
 import os
@@ -37,10 +48,53 @@ import typing
 from voussoirkit import vlogging
 
 from . import bringmaildb
-from . import constants
 from . import exceptions
 
 log = vlogging.get_logger(__name__)
+
+# The schema version this module upgrades to. Duplicated from
+# bringmail.constants on purpose: this module must not import the head schema.
+# Increment both values together.
+DATABASE_VERSION = 3
+
+# The accounts table as of version 3, the shape upgrade_2_to_3 creates. {table}
+# is replaced with the real or temporary table name.
+ACCOUNTS_TABLE_V3 = '''
+CREATE TABLE IF NOT EXISTS {table}(
+    id INTEGER PRIMARY KEY,
+    offline BOOLEAN NOT NULL DEFAULT 0,
+    label TEXT,
+    host TEXT,
+    port INT,
+    ssl BOOLEAN NOT NULL,
+    starttls BOOLEAN NOT NULL,
+    username TEXT,
+    password TEXT,
+    autorefresh_interval INT NOT NULL,
+    ui_order_rank REAL NOT NULL,
+    created INT NOT NULL,
+    last_refresh INT NOT NULL,
+    last_refresh_attempt INT NOT NULL,
+    last_refresh_error TEXT,
+    CONSTRAINT accounts_offline_connection CHECK (
+        (
+            offline = 0 AND
+            host IS NOT NULL AND
+            port IS NOT NULL AND
+            username IS NOT NULL AND
+            password IS NOT NULL
+        )
+        OR
+        (
+            offline = 1 AND
+            host IS NULL AND
+            port IS NULL AND
+            username IS NULL AND
+            password IS NULL
+        )
+    )
+)
+'''
 
 UpgradeFunction = typing.Callable[['Migrator'], None]
 
@@ -195,11 +249,10 @@ class Migrator:
             When True, raise if the transfer does not preserve the row count.
             Set False for migrations that intentionally delete rows.
 
-        Indexes on the rebuilt table are dropped with the old table. upgrade_all
-        recreates the indices from constants.DB_INIT after the migration.
-        Recreate any custom indices that are not declared in DB_INIT in the
-        migration itself. This helper does not recreate triggers or views;
-        BringMail currently has none.
+        Indexes and triggers on the rebuilt table are dropped with the old
+        table. This helper does not restore them. Call create_indices and
+        create_triggers afterwards with the definitions that should exist, or
+        recreate custom objects directly in the migration.
         '''
         _assert_identifier(table)
         if '{table}' not in create_sql:
@@ -253,42 +306,26 @@ class Migrator:
         self.execute(f'DROP TABLE "{table}"')
         self.execute(f'ALTER TABLE "{temp_table}" RENAME TO "{table}"')
 
-    def recreate_indices(self):
+    def create_indices(self, statements):
         '''
-        Recreate every index declared in constants.DB_INIT.
+        Execute the given CREATE INDEX statements.
 
-        The statements use IF NOT EXISTS, so this is safe to run after every
-        migration.
+        rebuild_table drops a table's indices with the table, so a migration
+        that rebuilds a table passes the definitions it needs restored. Use
+        IF NOT EXISTS when the index might already exist.
         '''
-        for statement in constants.DB_INIT.split(';'):
-            statement = statement.strip()
-            if statement.upper().startswith(('CREATE INDEX', 'CREATE UNIQUE INDEX')):
-                self.execute(statement)
+        for statement in statements:
+            self.execute(statement)
 
-    def recreate_triggers(self):
+    def create_triggers(self, statements):
         '''
-        Recreate the triggers declared in constants.DB_TRIGGERS.
+        Execute the given CREATE TRIGGER statements.
 
-        Triggers are dropped together with their table during rebuild_table, so
-        every migration must restore them. The statements use IF NOT EXISTS.
-
-        The trigger refers to the accounts.offline column, which does not exist
-        until the 2 -> 3 migration has run. Skipping the trigger for older
-        intermediate schemas keeps a 1 -> 3 upgrade working; the 2 -> 3 step
-        creates it on the rebuilt table.
+        Triggers are dropped with their table during rebuild_table, so a
+        migration that rebuilds a table passes the definitions it needs
+        restored. Use IF NOT EXISTS when the trigger might already exist.
         '''
-        table = self.db.sql_write.execute(
-            "SELECT name FROM sqlite_master WHERE type == 'table' AND name == 'accounts'"
-        ).fetchone()
-        if table is None:
-            return
-        columns = {
-            row['name']
-            for row in self.db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
-        }
-        if 'offline' not in columns:
-            return
-        for statement in constants.DB_TRIGGERS:
+        for statement in statements:
             self.execute(statement)
 
 
@@ -344,7 +381,8 @@ def upgrade_1_to_2(migrator):
     '''
     Add the offline pending-operations queue and the messages.local_deleted
     marker. The queue records the operation and the pre-state the user was
-    looking at so a later flush can detect server divergence.
+    looking at so a later flush can detect server divergence. The queue's
+    indices are created with the table.
     '''
     migrator.add_column(
         'messages',
@@ -376,6 +414,20 @@ def upgrade_1_to_2(migrator):
         FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE CASCADE
     )
     ''')
+    migrator.create_indices((
+        '''
+        CREATE INDEX IF NOT EXISTS index_pending_ops_account_state
+            ON pending_operations(account_id, state);
+        ''',
+        '''
+        CREATE INDEX IF NOT EXISTS index_pending_ops_message
+            ON pending_operations(message_id);
+        ''',
+        '''
+        CREATE INDEX IF NOT EXISTS index_pending_ops_folder_state
+            ON pending_operations(folder_id, state);
+        ''',
+    ))
 
 
 @upgrade_function(2, 3)
@@ -384,11 +436,13 @@ def upgrade_2_to_3(migrator):
     Add offline accounts. Existing accounts become online accounts. The
     connection columns become nullable because offline accounts must store no
     host, port, username, or password, and a CHECK constraint enforces both
-    shapes. A trigger keeps the offline flag immutable.
+    shapes. A trigger keeps the offline flag immutable. The rebuild drops the
+    table's indices and triggers, so this migration recreates the ones that
+    belong to the new table.
     '''
     migrator.rebuild_table(
         'accounts',
-        create_sql=constants.DB_ACCOUNTS_TABLE,
+        create_sql=ACCOUNTS_TABLE_V3,
         transfer_sql='''
         INSERT INTO {table} (
             id, label, host, port, ssl, starttls, username, password,
@@ -402,6 +456,27 @@ def upgrade_2_to_3(migrator):
         FROM {old_table}
         ''',
     )
+    migrator.create_indices((
+        '''
+        CREATE UNIQUE INDEX IF NOT EXISTS index_accounts_endpoint
+            ON accounts(host, port, username);
+        ''',
+        '''
+        CREATE INDEX IF NOT EXISTS index_accounts_ui_order_rank
+            ON accounts(ui_order_rank);
+        ''',
+    ))
+    migrator.create_triggers((
+        '''
+        CREATE TRIGGER IF NOT EXISTS accounts_offline_immutable
+        BEFORE UPDATE OF offline ON accounts
+        FOR EACH ROW
+        WHEN NEW.offline != OLD.offline
+        BEGIN
+            SELECT RAISE(ABORT, 'An account cannot be converted between online and offline.');
+        END
+        ''',
+    ))
 
 
 def upgrade_all(
@@ -414,15 +489,15 @@ def upgrade_all(
     ) -> UpgradeReport:
     '''
     Upgrade a database from its current version to target_version, which
-    defaults to constants.DATABASE_VERSION.
+    defaults to this module's DATABASE_VERSION.
 
     data_directory:
         The directory containing bringmail.db. When omitted, the closest
         _bringmail directory is found from the current working directory.
 
     target_version:
-        The destination version. Defaults to constants.DATABASE_VERSION;
-        callers normally leave it unset.
+        The destination version. Defaults to DATABASE_VERSION; callers normally
+        leave it unset.
 
     dry_run:
         Report pending migrations without changing anything.
@@ -438,7 +513,7 @@ def upgrade_all(
     if upgrades is None:
         upgrades = UPGRADES
     target_version = (
-        constants.DATABASE_VERSION
+        DATABASE_VERSION
         if target_version is None
         else int(target_version)
     )
@@ -497,8 +572,6 @@ def upgrade_all(
 
                         migrator = Migrator(db)
                         function(migrator)
-                        migrator.recreate_indices()
-                        migrator.recreate_triggers()
 
                         violations = db.sql_write.execute(
                             'PRAGMA foreign_key_check'

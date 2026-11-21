@@ -70,6 +70,11 @@ class UpgradeTest(unittest.TestCase):
             skip_version_check=True,
         )
 
+    def test_database_version_matches_constants(self):
+        # upgrades keeps its own copy so it does not import the head schema.
+        # Both values have to move together.
+        self.assertEqual(upgrades.DATABASE_VERSION, constants.DATABASE_VERSION)
+
     def test_upgrade_1_to_2_creates_pending_queue(self):
         self.make_database()
 
