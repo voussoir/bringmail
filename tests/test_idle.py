@@ -1,3 +1,4 @@
+import imaplib
 import os
 import sys
 import unittest
@@ -138,6 +139,41 @@ class IdleSessionTest(unittest.TestCase):
         self.assertEqual(self.client.idle_calls, 2)
         self.assertIn(idle.EVENT_EXISTS, [event.kind for event in events])
         self.assertTrue(session.is_idling)
+
+    def test_poll_translates_socket_eof(self):
+        session = self.make_session()
+        session.open()
+        error = imaplib.IMAP4.abort('socket error: EOF')
+
+        with mock.patch.object(self.client, 'idle_check', side_effect=error):
+            with self.assertRaises(exceptions.IdleDisconnected) as caught:
+                session.poll()
+
+        self.assertIs(caught.exception.__cause__, error)
+        self.assertFalse(session.is_idling)
+
+    def test_renew_translates_connection_reset(self):
+        session = self.make_session()
+        session.open()
+        session.poll()
+        error = ConnectionResetError(104, 'Connection reset by peer')
+
+        with mock.patch.object(self.client, 'idle_done', side_effect=error):
+            with self.assertRaises(exceptions.IdleDisconnected):
+                session.renew()
+
+        self.assertFalse(session.is_idling)
+
+    def test_poll_does_not_translate_other_errors(self):
+        session = self.make_session()
+        session.open()
+        error = RuntimeError('boom')
+
+        with mock.patch.object(self.client, 'idle_check', side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
+                session.poll()
+
+        self.assertIs(caught.exception, error)
 
     def test_close_graceful(self):
         session = self.make_session()

@@ -217,7 +217,7 @@ class IdleWatcher:
                 while not self._stop_event.is_set():
                     events = session.poll(timeout=self.poll_seconds)
                     if any(event.kind == idle.EVENT_BYE for event in events):
-                        raise exceptions.MailServerConnectionError(
+                        raise exceptions.IdleDisconnected(
                             'The server closed the IDLE connection.'
                         )
                     interesting = [
@@ -241,11 +241,20 @@ class IdleWatcher:
             except Exception as exc:
                 graceful = False
                 self._notify_state(STATE_RETRYING, str(exc))
-                log.info(
-                    'IMAP IDLE connection for %s failed: %s',
-                    self.snapshot,
-                    exc,
-                )
+                if isinstance(exc, exceptions.IdleDisconnected):
+                    # Server-side closes are a normal part of IDLE. Keep the
+                    # default log quiet while retaining the detail for --debug.
+                    log.debug(
+                        'IMAP IDLE connection for %s disconnected: %s',
+                        self.snapshot,
+                        exc,
+                    )
+                else:
+                    log.info(
+                        'IMAP IDLE connection for %s failed: %s',
+                        self.snapshot,
+                        exc,
+                    )
                 if self._stop_event.wait(reconnect_seconds):
                     break
                 reconnect_seconds = min(

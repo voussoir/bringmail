@@ -89,6 +89,19 @@ class UnsupportedSession(FakeSession):
         raise exceptions.IdleUnsupported()
 
 
+class DisconnectOnceSession(FakeSession):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.disconnected = False
+
+    def poll(self, timeout=None):
+        if not self.disconnected:
+            self.disconnected = True
+            time.sleep(0.01)
+            raise exceptions.IdleDisconnected('socket error: EOF')
+        return super().poll(timeout=timeout)
+
+
 class IdleWatcherTest(unittest.TestCase):
     def test_connected_catch_up_and_event(self):
         changes = []
@@ -198,6 +211,40 @@ class IdleWatcherTest(unittest.TestCase):
 
         self.assertIn(idle_supervisor.STATE_RETRYING, states)
         self.assertGreaterEqual(factory.calls, 2)
+
+    def test_expected_disconnect_logged_at_debug(self):
+        retrying = threading.Event()
+        connected = threading.Event()
+
+        def on_state(snapshot, state, detail):
+            if state == idle_supervisor.STATE_RETRYING:
+                retrying.set()
+            elif state == idle_supervisor.STATE_CONNECTED:
+                connected.set()
+
+        watcher = idle_supervisor.IdleWatcher(
+            make_snapshot(),
+            None,
+            on_state,
+            poll_seconds=0.01,
+            reconnect_min_seconds=0.01,
+            reconnect_max_seconds=0.02,
+            session_factory=RecordingFactory(session_class=DisconnectOnceSession),
+        )
+
+        with self.assertLogs('bringmail.idle_supervisor', level='DEBUG') as captured:
+            watcher.start()
+            try:
+                self.assertTrue(retrying.wait(2))
+                self.assertTrue(connected.wait(2))
+            finally:
+                watcher.stop()
+                watcher.join(timeout=2)
+
+        messages = [record.getMessage() for record in captured.records]
+        self.assertTrue(any('disconnected' in message for message in messages))
+        self.assertTrue(any('socket error: EOF' in message for message in messages))
+        self.assertFalse(any('failed' in message for message in messages))
 
     def test_debounce_coalesces_events(self):
         changes = []

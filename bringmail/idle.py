@@ -9,6 +9,8 @@ bringmail.idle_supervisor.
 '''
 import contextlib
 import dataclasses
+import imaplib
+import ssl
 import time
 
 from . import constants
@@ -25,6 +27,17 @@ EVENT_FLAGS = 'flags'
 EVENT_OK = 'ok'
 EVENT_BYE = 'bye'
 EVENT_OTHER = 'other'
+
+# Socket closures that are a normal part of the IDLE lifecycle. Other errors,
+# such as bad credentials, TLS verification, and DNS failures, must remain
+# visible to the operator.
+_EXPECTED_DISCONNECTS = (
+    imaplib.IMAP4.abort,
+    ConnectionAbortedError,
+    ConnectionResetError,
+    BrokenPipeError,
+    ssl.SSLEOFError,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -146,6 +159,18 @@ class IdleSession:
             return False
         return (time.monotonic() - self._idle_started) >= self.renew_seconds
 
+    @contextlib.contextmanager
+    def _disconnect_guard(self):
+        '''
+        Translate a closed socket into IdleDisconnected so callers can tell it
+        apart from configuration and protocol failures.
+        '''
+        try:
+            yield
+        except _EXPECTED_DISCONNECTS as exc:
+            self._idling = False
+            raise exceptions.IdleDisconnected(str(exc)) from exc
+
     @staticmethod
     def _close_client(client, *, graceful):
         if graceful:
@@ -197,14 +222,16 @@ class IdleSession:
             raise RuntimeError('IdleSession is not open.')
         if timeout is None:
             timeout = self.poll_seconds
-        if not self._idling:
-            self._start_idle()
 
-        responses = self.client.idle_check(timeout=timeout)
-        events = [parse_response(response) for response in (responses or [])]
+        with self._disconnect_guard():
+            if not self._idling:
+                self._start_idle()
 
-        if self.renew_due:
-            events.extend(self.renew())
+            responses = self.client.idle_check(timeout=timeout)
+            events = [parse_response(response) for response in (responses or [])]
+
+            if self.renew_due:
+                events.extend(self.renew())
 
         return events
 
@@ -218,15 +245,17 @@ class IdleSession:
         if not self._idling:
             return []
 
-        try:
-            (_, responses) = self.client.idle_done()
-        except Exception:
-            self._idling = False
-            raise
+        with self._disconnect_guard():
+            try:
+                (_, responses) = self.client.idle_done()
+            except Exception:
+                self._idling = False
+                raise
 
-        self._idling = False
-        events = [parse_response(response) for response in (responses or [])]
-        self._start_idle()
+            self._idling = False
+            events = [parse_response(response) for response in (responses or [])]
+            self._start_idle()
+
         return events
 
     def close(self, graceful=True):

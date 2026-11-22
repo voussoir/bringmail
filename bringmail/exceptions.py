@@ -132,6 +132,15 @@ class IdleUnsupported(MailServerError):
     error_message = 'The mail server does not advertise the IMAP IDLE capability.'
 
 
+class IdleDisconnected(MailServerConnectionError):
+    '''
+    The server closed an IMAP IDLE connection. The watcher reconnects, so this
+    is an expected part of the IDLE lifecycle rather than a failure that needs
+    attention.
+    '''
+    error_message = '{}'
+
+
 # DATABASE #########################################################################################
 
 class BadDataDirectory(BringException):
