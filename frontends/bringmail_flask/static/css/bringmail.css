@@ -51,6 +51,11 @@ body.layout_lmr #content_body
     font-weight: bold;
 }
 
+#status_text.not_connected
+{
+    color: #ff6b6b;
+}
+
 #status_detail
 {
     overflow: hidden;

@@ -18,6 +18,11 @@ const BASE_TAB_TITLE = "BringMail";
 // must not trigger a second request.
 const RESELECTION_NOOP_MS = 500;
 
+// The backend broadcasts an SSE keepalive every 60 seconds. If none arrives
+// for this long, the event stream is treated as disconnected even though the
+// browser may still be holding it open.
+const SSE_KEEPALIVE_TIMEOUT_MS = 90000;
+
 let accounts_element = null;
 let messages_element = null;
 let filter_input = null;
@@ -97,6 +102,7 @@ let allow_images = false;
 
 let sse = null;
 let sse_watchdog_timeout = null;
+let sse_keepalive_timeout = null;
 let dynamic_filter_timeout = null;
 let accounts_reload_timeout = null;
 let status_text_element = null;
@@ -104,6 +110,7 @@ let status_detail_element = null;
 let status_timestamp_element = null;
 let status_spinner = null;
 let refresh_status = null;
+let server_connected = true;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2592,6 +2599,28 @@ function update_status_timestamp()
     status_timestamp_element.textContent = new Date().toLocaleString();
 }
 
+function set_server_connected(connected)
+{
+    if (server_connected === connected)
+    {
+        return;
+    }
+    server_connected = connected;
+    render_status_bar();
+}
+
+function init_connection_detection()
+{
+    http.on_response = function()
+    {
+        set_server_connected(true);
+    };
+    http.on_network_error = function()
+    {
+        set_server_connected(false);
+    };
+}
+
 function render_status_bar()
 {
     if (!status_text_element)
@@ -2599,6 +2628,15 @@ function render_status_bar()
         return;
     }
     update_status_timestamp();
+    if (!server_connected)
+    {
+        status_text_element.textContent = "⚠ Not connected";
+        status_text_element.classList.add("not_connected");
+        status_detail_element.textContent = "";
+        status_spinner.hide();
+        return;
+    }
+    status_text_element.classList.remove("not_connected");
     if (!refresh_status)
     {
         status_text_element.textContent = "Idle";
@@ -2727,17 +2765,40 @@ function finish_refresh_queue()
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // SSE
 
+function reset_sse_keepalive_timeout()
+{
+    clearTimeout(sse_keepalive_timeout);
+    sse_keepalive_timeout = setTimeout(function()
+    {
+        set_server_connected(false);
+    }, SSE_KEEPALIVE_TIMEOUT_MS);
+}
+
 function start_sse()
 {
     // UI contract: background refreshes, including scheduled syncs and IMAP
     // IDLE notifications, must never auto-reload the message list or the
     // reader panel. Only the account tree and unread counts are refreshed;
     // the user re-clicks the account or folder to load new messages.
+    clearTimeout(sse_keepalive_timeout);
     if (sse !== null)
     {
         sse.close();
     }
     sse = new EventSource("/sse");
+
+    sse.onopen = function()
+    {
+        set_server_connected(true);
+        reset_sse_keepalive_timeout();
+    };
+
+    sse.onerror = function()
+    {
+        set_server_connected(false);
+    };
+
+    reset_sse_keepalive_timeout();
 
     sse.addEventListener("account_refresh_started", function(event)
     {
@@ -2963,8 +3024,10 @@ function start_sse()
 
     sse.addEventListener("keepalive", function()
     {
+        set_server_connected(true);
         clearTimeout(sse_watchdog_timeout);
         sse_watchdog_timeout = setTimeout(start_sse, 120000);
+        reset_sse_keepalive_timeout();
     });
 }
 
@@ -3017,6 +3080,7 @@ function on_pageload()
     status_text_element = document.getElementById("status_text");
     status_detail_element = document.getElementById("status_detail");
     status_timestamp_element = document.getElementById("status_timestamp");
+    init_connection_detection();
     update_status_timestamp();
 
     reader_subject = document.getElementById("reader_subject");

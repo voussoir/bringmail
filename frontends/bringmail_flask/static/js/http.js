@@ -2,6 +2,13 @@ const http = {};
 
 http.HEADERS = {};
 
+// Optional callbacks that let the UI distinguish a reachable server from a
+// network-level failure. on_response fires for any completed server response,
+// including error statuses. on_network_error fires when the request could not
+// reach the server, excluding requests that were deliberately aborted.
+http.on_response = null;
+http.on_network_error = null;
+
 http.formdata = function formdata(data)
 {
     const fd = new FormData();
@@ -34,11 +41,22 @@ http._request = function _request(kwargs)
             status: 0,
             json_ok: false,
             kwargs: kwargs,
+            aborted: false,
         },
         retry: function()
         {
             http._request(kwargs);
         },
+    };
+
+    // XMLHttpRequest does not expose whether status 0 came from an abort or a
+    // network failure, so remember explicit aborts and keep them out of the
+    // connection-state callbacks.
+    const native_abort = request.abort.bind(request);
+    request.abort = function abort()
+    {
+        response.meta.aborted = true;
+        native_abort();
     };
 
     request.onreadystatechange = function()
@@ -61,6 +79,14 @@ http._request = function _request(kwargs)
                 response.meta.json_ok = false;
                 response.text = request.responseText;
             }
+            if (http.on_response)
+            {
+                http.on_response(response);
+            }
+        }
+        else if (!response.meta.aborted && http.on_network_error)
+        {
+            http.on_network_error(response);
         }
         if (kwargs.callback)
         {
