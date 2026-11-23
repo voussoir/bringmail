@@ -10,7 +10,6 @@ if REPO_ROOT not in sys.path:
 from bringmail import constants
 from bringmail import outbox
 
-
 def make_row(
         id,
         *,
@@ -58,7 +57,6 @@ def make_row(
         'created': created,
         'updated': created,
     }
-
 
 class ConsolidationTest(unittest.TestCase):
     def execute_ids(self, rows):
@@ -269,7 +267,6 @@ class ConsolidationTest(unittest.TestCase):
         ]
         self.assertEqual(outbox.virtual_folder_id(10, operations), 30)
 
-
 class BackoffTest(unittest.TestCase):
     def test_backoff_grows_and_caps(self):
         self.assertEqual(outbox.backoff_seconds(0), constants.OUTBOX_RETRY_BASE_SECONDS)
@@ -283,7 +280,6 @@ class BackoffTest(unittest.TestCase):
         row = outbox.Operation.from_row(make_row(1, created=0))
         self.assertTrue(outbox.is_expired(row, constants.OUTBOX_RETRY_EXPIRE_SECONDS))
         self.assertFalse(outbox.is_expired(row, 10))
-
 
 class SummaryTest(unittest.TestCase):
     def test_pending_message_states_uses_latest_row(self):
@@ -303,7 +299,6 @@ class SummaryTest(unittest.TestCase):
         counts = outbox.summarize(rows)
         self.assertEqual(counts[constants.PENDING_STATE_PENDING], 1)
         self.assertEqual(counts[constants.PENDING_STATE_CONFLICTED], 1)
-
 
 if __name__ == '__main__':
     unittest.main()

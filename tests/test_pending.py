@@ -15,7 +15,6 @@ from bringmail import helpers
 from bringmail import objects
 from bringmail import outbox
 
-
 class FakeFlushClient:
     def __init__(self, uidvalidity=1):
         self.uidvalidity = uidvalidity
@@ -92,7 +91,6 @@ class FakeFlushClient:
 
     def logout(self):
         self.logged_out = True
-
 
 class PendingQueueTest(unittest.TestCase):
     def setUp(self):
@@ -864,7 +862,6 @@ class PendingQueueTest(unittest.TestCase):
             self.db.get_pending_for_message(message.id)[0].state,
             constants.PENDING_STATE_SENT,
         )
-
 
 if __name__ == '__main__':
     unittest.main()

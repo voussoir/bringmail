@@ -9,7 +9,6 @@ from .. import common
 
 site = common.site
 
-
 def _pagination_args():
     try:
         limit = int(request.args.get('limit', bringmail.constants.DEFAULT_PAGE_SIZE))
@@ -31,7 +30,6 @@ def _pagination_args():
         before_id = None
 
     return (limit, before_date, before_id)
-
 
 def _message_list_response(*, folder=None, account=None, all_accounts=False):
     (limit, before_date, before_id) = _pagination_args()
@@ -71,12 +69,10 @@ def _message_list_response(*, folder=None, account=None, all_accounts=False):
         response['account'] = account.jsonify(unread_count=True, pending_count=True)
     return flasktools.json_response(response)
 
-
 @site.route('/folder/<folder_id>.json')
 def get_folder_json(folder_id):
     folder = common.get_folder(folder_id, response_type='json')
     return flasktools.json_response(folder.jsonify())
-
 
 @site.route('/folder/<folder_id>/messages.json')
 @flasktools.cached_endpoint(max_age=0, etag_function=lambda: common.bringdb.last_commit_id, max_urls=100)
@@ -84,19 +80,16 @@ def get_folder_messages_json(folder_id):
     folder = common.get_folder(folder_id, response_type='json')
     return _message_list_response(folder=folder)
 
-
 @site.route('/account/<account_id>/messages.json')
 @flasktools.cached_endpoint(max_age=0, etag_function=lambda: common.bringdb.last_commit_id, max_urls=50)
 def get_account_messages_json(account_id):
     account = common.get_account(account_id, response_type='json')
     return _message_list_response(account=account)
 
-
 @site.route('/all/messages.json')
 @flasktools.cached_endpoint(max_age=0, etag_function=lambda: common.bringdb.last_commit_id, max_urls=10)
 def get_all_messages_json():
     return _message_list_response(all_accounts=True)
-
 
 @site.route('/folder/<folder_id>/refresh', methods=['POST'])
 def post_folder_refresh(folder_id):
@@ -105,7 +98,6 @@ def post_folder_refresh(folder_id):
         return flasktools.json_response({}, status=400)
     common.add_folder_to_refresh_queue(folder, manual=True)
     return flasktools.json_response({})
-
 
 @site.route('/folder/<folder_id>/set_sync_enabled', methods=['POST'])
 @flasktools.required_fields(['sync_enabled'])

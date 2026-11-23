@@ -1,6 +1,5 @@
 from voussoirkit import stringtools
 
-
 class ErrorTypeAdder(type):
     '''
     During definition, the Exception class will automatically receive a class
@@ -13,7 +12,6 @@ class ErrorTypeAdder(type):
     def __init__(cls, name, bases, clsdict):
         type.__init__(cls, name, bases, clsdict)
         cls.error_type = stringtools.pascal_to_loudsnakes(name)
-
 
 class BringException(Exception, metaclass=ErrorTypeAdder):
     '''
@@ -43,56 +41,44 @@ class BringException(Exception, metaclass=ErrorTypeAdder):
         }
         return j
 
-
 # NO SUCH ##########################################################################################
 
 class NoSuch(BringException):
     pass
 
-
 class NoSuchAccount(NoSuch):
     error_message = 'Account "{}" does not exist.'
-
 
 class NoSuchFolder(NoSuch):
     error_message = 'Folder "{}" does not exist.'
 
-
 class NoSuchMessage(NoSuch):
     error_message = 'Message "{}" does not exist.'
 
-
 class NoSuchPart(NoSuch):
     error_message = 'Message part "{}" does not exist.'
-
 
 # ACCOUNTS / FOLDERS ###############################################################################
 
 class InvalidAccount(BringException):
     error_message = '{}'
 
-
 class DuplicateAccount(InvalidAccount):
     error_message = 'An account for {username} at {host}:{port} already exists.'
-
 
 class InvalidFolder(BringException):
     error_message = '{}'
 
-
 class FolderNotSelectable(InvalidFolder):
     error_message = 'Folder "{}" can not be selected.'
 
-
 class TrashNotFound(BringException):
     error_message = 'This account has no trash folder; delete is unavailable.'
-
 
 # MESSAGES #########################################################################################
 
 class MessageNotCached(BringException):
     error_message = 'The body of message "{}" has not been downloaded yet.'
-
 
 class PendingConflict(BringException):
     '''
@@ -101,36 +87,28 @@ class PendingConflict(BringException):
     '''
     error_message = '{}'
 
-
 class NothingToRestore(BringException):
     error_message = 'This message has no deleted state to restore.'
 
-
 class BadEmail(BringException):
     error_message = 'Could not parse email "{}".'
-
 
 # MAIL SERVER ######################################################################################
 
 class MailServerError(BringException):
     error_message = '{}'
 
-
 class MailServerConnectionError(MailServerError):
     error_message = 'Could not connect to the mail server: {}'
-
 
 class MailServerLoginError(MailServerError):
     error_message = 'Could not log in: {}'
 
-
 class MailServerActionError(MailServerError):
     error_message = 'The mail server refused the action: {}'
 
-
 class IdleUnsupported(MailServerError):
     error_message = 'The mail server does not advertise the IMAP IDLE capability.'
-
 
 class IdleDisconnected(MailServerConnectionError):
     '''
@@ -140,7 +118,6 @@ class IdleDisconnected(MailServerConnectionError):
     '''
     error_message = '{}'
 
-
 # DATABASE #########################################################################################
 
 class BadDataDirectory(BringException):
@@ -148,7 +125,6 @@ class BadDataDirectory(BringException):
     Raised by BringMailDB.__init__ if the requested data_directory is invalid.
     '''
     error_message = 'Bad data directory "{}"'
-
 
 class DatabaseOutOfDate(BringException):
     '''
@@ -158,7 +134,6 @@ class DatabaseOutOfDate(BringException):
 Database is out of date. {existing} should be {new}.
 Please stop BringMail and run utilities/database_upgrader.py.
 '''.strip()
-
 
 class DatabaseTooNew(BringException):
     '''
@@ -170,13 +145,11 @@ Database version {existing} is newer than this copy of BringMail supports ({new}
 Use a newer copy of BringMail or restore a backup from before the upgrade.
 '''.strip()
 
-
 class DatabaseUpgradeError(BringException):
     '''
     Raised by bringmail.upgrades when a migration cannot be applied safely.
     '''
     error_message = '{}'
-
 
 class SQLiteTooOld(BringException):
     '''
@@ -188,7 +161,6 @@ BringMail requires SQLite {required} or newer, but this Python is using SQLite {
 Install a newer Python (3.11 or newer is a safe choice) and run BringMail again.
 '''.strip()
 
-
 class NoClosestBringMailDB(BringException):
     '''
     For calls to BringMailDB.closest_bringmaildb where none exists between cwd
@@ -196,13 +168,11 @@ class NoClosestBringMailDB(BringException):
     '''
     error_message = 'There is no BringMail database in "{}" or its parents.'
 
-
 class NotExclusive(BringException):
     '''
     For when two or more mutually exclusive actions have been requested.
     '''
     error_message = 'One and only one of {} must be passed.'
-
 
 # GENERAL ##########################################################################################
 

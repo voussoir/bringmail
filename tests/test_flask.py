@@ -18,7 +18,6 @@ from bringmail_flask.backend import common
 
 FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'simple.eml')
 
-
 class FlaskTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -761,7 +760,6 @@ class FlaskTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         data = response.get_json()
         self.assertEqual(data['error_type'], 'INVALID_FOLDER')
-
 
 if __name__ == '__main__':
     unittest.main()

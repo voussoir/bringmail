@@ -18,13 +18,11 @@ import typing
 
 from . import constants
 
-
 def _row_get(row, key, default=None):
     try:
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
-
 
 def _loads_json(value, default):
     if not value:
@@ -35,7 +33,6 @@ def _loads_json(value, default):
         return json.loads(value)
     except (TypeError, ValueError):
         return default
-
 
 @dataclasses.dataclass(frozen=True)
 class Operation:
@@ -162,7 +159,6 @@ class Operation:
     def label(self):
         return describe(self.operation, self.enabled)
 
-
 def describe(operation, enabled=None):
     '''
     A short, user-facing description of a queued operation.
@@ -187,7 +183,6 @@ def describe(operation, enabled=None):
         return 'Moved to another account'
     return operation
 
-
 @dataclasses.dataclass(frozen=True)
 class Plan:
     '''
@@ -207,7 +202,6 @@ class Plan:
     def all_superseded_ids(self):
         return set(self.superseded)
 
-
 def _group_by_subject(operations):
     groups = {}
     for operation in operations:
@@ -215,7 +209,6 @@ def _group_by_subject(operations):
     for group in groups.values():
         group.sort(key=lambda operation: operation.id)
     return groups
-
 
 def _consolidate_flags(group):
     '''
@@ -243,7 +236,6 @@ def _consolidate_flags(group):
         superseded.extend(operation.id for operation in rows[:-1])
         to_execute.append(latest)
     return (to_execute, superseded)
-
 
 def _consolidate_folders(group):
     '''
@@ -304,7 +296,6 @@ def _consolidate_folders(group):
 
     return (accepted + cross_ops, superseded)
 
-
 def consolidate(operations):
     '''
     Turn the unsent rows for one account into a Plan.
@@ -333,7 +324,6 @@ def consolidate(operations):
     to_execute.sort(key=lambda operation: (0 if operation.is_folder else 1, operation.id))
     return Plan(execute=tuple(to_execute), superseded=tuple(superseded))
 
-
 def backoff_seconds(attempts):
     '''
     Delay before the next retry of a row that has failed `attempts` times.
@@ -345,7 +335,6 @@ def backoff_seconds(attempts):
     delay = constants.OUTBOX_RETRY_BASE_SECONDS * (2 ** attempts)
     return int(min(delay, constants.OUTBOX_RETRY_MAX_SECONDS))
 
-
 def is_expired(operation, now):
     '''
     True when a row has been retried for longer than the queue allows.
@@ -353,7 +342,6 @@ def is_expired(operation, now):
     if operation.state != constants.PENDING_STATE_PENDING:
         return False
     return (now - operation.created) >= constants.OUTBOX_RETRY_EXPIRE_SECONDS
-
 
 def summarize(operations):
     '''
@@ -367,7 +355,6 @@ def summarize(operations):
             operation = Operation.from_row(operation)
         counts[operation.state] = counts.get(operation.state, 0) + 1
     return counts
-
 
 def pending_message_states(operations):
     '''
@@ -388,7 +375,6 @@ def pending_message_states(operations):
             'state': operation.state,
         }
     return states
-
 
 def operation_payload(operation):
     '''
@@ -418,7 +404,6 @@ def operation_payload(operation):
         'next_attempt': operation.next_attempt,
     }
 
-
 def virtual_folder_id(current_folder_id, operations):
     '''
     The folder a message is going to be in once every queued folder
@@ -439,7 +424,6 @@ def virtual_folder_id(current_folder_id, operations):
             folder_id = operation.base_folder_id
         folder_id = operation.target_folder_id
     return folder_id
-
 
 def flag_value_label(operation):
     '''

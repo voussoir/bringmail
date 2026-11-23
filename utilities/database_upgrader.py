@@ -19,7 +19,6 @@ log = vlogging.getLogger(__name__, 'database_upgrader')
 
 import bringmail
 
-
 def _print_error(exc):
     if hasattr(exc, 'error_message'):
         message = exc.error_message
@@ -32,7 +31,6 @@ def _print_error(exc):
         if 'locked' in str(exc).lower() or 'busy' in str(exc).lower():
             print('Stop the BringMail server and try again.', file=sys.stderr)
 
-
 def _print_plan(plan):
     print(f'Database: {plan.database_path}')
     print(f'Version: {plan.start_version} -> {plan.target_version}')
@@ -41,7 +39,6 @@ def _print_plan(plan):
         print(f'Pending migrations: {versions}')
     else:
         print('Nothing to do.')
-
 
 def database_upgrader_argparse(args):
     try:
@@ -95,7 +92,6 @@ def database_upgrader_argparse(args):
         print(f'Backup: {report.backup}')
     return 0
 
-
 @vlogging.main_decorator(log=log)
 def main(argv):
     parser = argparse.ArgumentParser(
@@ -132,7 +128,6 @@ def main(argv):
 
     args = parser.parse_args(argv)
     return args.func(args)
-
 
 if __name__ == '__main__':
     raise SystemExit(main(sys.argv[1:]))

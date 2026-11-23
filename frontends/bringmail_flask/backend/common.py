@@ -77,7 +77,6 @@ def catch_bringmail_exception(endpoint):
             flask.abort(response)
     return wrapped
 
-
 @site.before_request
 def before_request():
     request.is_localhost = (request.remote_addr == '127.0.0.1')
@@ -90,16 +89,13 @@ def before_request():
         if request.headers.get('X-BringMail-Request') != '1':
             flask.abort(403)
 
-
 @site.after_request
 def after_request(response):
     response = flasktools.gzip_response(request, response)
     return response
 
-
 DEFAULT_LAYOUT = 'ltb'
 LAYOUTS = {'ltb', 'lmr'}
-
 
 def give_layout_cookie(function, *, cookie_name, default_layout):
     @functools.wraps(function)
@@ -126,7 +122,6 @@ def give_layout_cookie(function, *, cookie_name, default_layout):
 
         return response
     return wrapped
-
 
 site.route = flasktools.decorate_and_route(
     flask_app=site,
@@ -178,21 +173,17 @@ def getter_wrapper(getter_function):
 
     return getter_wrapped
 
-
 @getter_wrapper
 def get_account(account_id):
     return bringdb.get_account(account_id)
-
 
 @getter_wrapper
 def get_folder(folder_id):
     return bringdb.get_folder(folder_id)
 
-
 @getter_wrapper
 def get_message(message_id):
     return bringdb.get_message(message_id)
-
 
 @getter_wrapper
 def get_messages(message_ids):
@@ -202,13 +193,11 @@ def get_messages(message_ids):
         raise_for_missing=True,
     )
 
-
 PENDING_VISIBLE_STATES = (
     bringmail.constants.PENDING_STATE_PENDING,
     bringmail.constants.PENDING_STATE_CONFLICTED,
     bringmail.constants.PENDING_STATE_FAILED,
 )
-
 
 def pending_states_for_messages(message_ids):
     '''
@@ -224,10 +213,8 @@ def pending_states_for_messages(message_ids):
     )
     return bringmail.outbox.pending_message_states(rows)
 
-
 def pending_state_for(message):
     return pending_states_for_messages([message.id]).get(message.id)
-
 
 # Other functions ##################################################################################
 
@@ -238,7 +225,6 @@ def get_layout():
     if layout not in LAYOUTS:
         layout = DEFAULT_LAYOUT
     return layout
-
 
 def render_template(request, template_name, **kwargs):
     theme = request.cookies.get('bringmail_theme', None)
@@ -251,7 +237,6 @@ def render_template(request, template_name, **kwargs):
         **kwargs,
     )
     return response
-
 
 # Background threads ###############################################################################
 
@@ -270,13 +255,11 @@ _REFRESH_SEQUENCE = itertools.count()
 # queued during a flush are not left waiting for the next scheduled refresh.
 _FLUSH_REQUEUE = set()
 
-
 @dataclasses.dataclass(frozen=True)
 class RefreshJob:
     account_id: int
     folder_id: int | None = None
     manual: bool = False
-
 
 @dataclasses.dataclass(frozen=True)
 class FlushJob:
@@ -286,7 +269,6 @@ class FlushJob:
     '''
     account_id: int
     manual: bool = False
-
 
 @dataclasses.dataclass(frozen=True)
 class DiscardJob:
@@ -298,14 +280,12 @@ class DiscardJob:
     account_id: int
     manual: bool = False
 
-
 def _job_key(job):
     if isinstance(job, DiscardJob):
         return (job.account_id, 'discard')
     if isinstance(job, FlushJob):
         return (job.account_id, 'flush')
     return (job.account_id, job.folder_id)
-
 
 def _enqueue_refresh_job(job):
     key = _job_key(job)
@@ -328,7 +308,6 @@ def _enqueue_refresh_job(job):
     REFRESH_QUEUE.put((priority, next(_REFRESH_SEQUENCE), job))
     return True
 
-
 def add_account_to_refresh_queue(account, *, manual=False):
     if not isinstance(account, bringmail.objects.Account):
         account = bringdb.get_account(account)
@@ -337,7 +316,6 @@ def add_account_to_refresh_queue(account, *, manual=False):
     if _enqueue_refresh_job(job):
         log.debug('Adding %s to refresh queue.', account)
 
-
 def add_folder_to_refresh_queue(folder, *, manual=False):
     if not isinstance(folder, bringmail.objects.Folder):
         folder = bringdb.get_folder(folder)
@@ -345,7 +323,6 @@ def add_folder_to_refresh_queue(folder, *, manual=False):
     job = RefreshJob(folder.account_id, folder.id, manual)
     if _enqueue_refresh_job(job):
         log.debug('Adding folder %s to refresh queue.', folder)
-
 
 def add_flush_to_queue(account, *, manual=False):
     if not isinstance(account, bringmail.objects.Account):
@@ -358,7 +335,6 @@ def add_flush_to_queue(account, *, manual=False):
     with _REFRESH_QUEUE_LOCK:
         _FLUSH_REQUEUE.add(account.id)
 
-
 def add_discard_to_queue(account, *, manual=True):
     if not isinstance(account, bringmail.objects.Account):
         account = bringdb.get_account(account)
@@ -366,7 +342,6 @@ def add_discard_to_queue(account, *, manual=True):
     job = DiscardJob(account.id, manual)
     if _enqueue_refresh_job(job):
         log.debug('Adding %s to pending discard queue.', account)
-
 
 def clear_refresh_queue():
     with _REFRESH_QUEUE_LOCK:
@@ -377,7 +352,6 @@ def clear_refresh_queue():
                 break
         _REFRESH_QUEUE_SET.clear()
         _FLUSH_REQUEUE.clear()
-
 
 def autorefresh_thread():
     '''
@@ -421,14 +395,13 @@ def autorefresh_thread():
         sleepy = max(sleepy, 30)
         sleepy = min(sleepy, 3600)
         sleepy = int(sleepy)
-        log.info('Sleeping %s until next account refresh.', sleepy)
+        # log.info('Sleeping %s until next account refresh.', sleepy)
         try:
             event = AUTOREFRESH_THREAD_EVENTS.get(timeout=sleepy)
             if event is QUIT_EVENT:
                 break
         except queue.Empty:
             pass
-
 
 def _account_refresh(account):
     flasktools.send_sse(
@@ -453,7 +426,6 @@ def _account_refresh(account):
         }),
     )
     return error
-
 
 def _folder_refresh(account, folder_id):
     folder = bringdb.get_folder(folder_id)
@@ -491,7 +463,6 @@ def _folder_refresh(account, folder_id):
     )
     return error
 
-
 def _flush_account(account):
     '''
     Send queued offline operations for one account and report the outcome.
@@ -523,7 +494,6 @@ def _flush_account(account):
     )
     return summary
 
-
 def _discard_account(account):
     '''
     Abandon the account's visible queued operations and report the outcome.
@@ -535,7 +505,6 @@ def _discard_account(account):
         data=json.dumps(summary),
     )
     return summary
-
 
 def refresh_queue_thread():
     '''
@@ -620,7 +589,6 @@ def refresh_queue_thread():
                 except Exception:
                     log.warning('IDLE supervisor reconfigure raised.', exc_info=True)
 
-
 def _idle_change(snapshot, events, reason):
     '''
     An IDLE watcher saw a mailbox change or just reconnected. Queue a targeted
@@ -639,7 +607,6 @@ def _idle_change(snapshot, events, reason):
     except Exception:
         log.debug('Could not queue the IDLE folder refresh.', exc_info=True)
 
-
 def _idle_state(snapshot, state, detail):
     flasktools.send_sse(
         event='idle_state',
@@ -653,7 +620,6 @@ def _idle_state(snapshot, state, detail):
         }),
     )
 
-
 def reconfigure_idle_supervisor():
     if supervisor is None:
         return
@@ -662,19 +628,16 @@ def reconfigure_idle_supervisor():
     except Exception:
         log.warning('IDLE supervisor reconfigure raised.', exc_info=True)
 
-
 def sse_keepalive_thread():
     log.info('Starting SSE keepalive thread.')
     while True:
         flasktools.send_sse(event='keepalive', data=bringmail.helpers.now())
         time.sleep(60)
 
-
 def init_bringdb(*args, **kwargs):
     global bringdb
     bringdb = bringmail.bringmaildb.BringMailDB.closest_bringmaildb(*args, **kwargs)
     return bringdb
-
 
 def start_background_threads():
     global supervisor
@@ -693,7 +656,6 @@ def start_background_threads():
             supervisor.start()
         except Exception:
             log.warning('Could not start the IMAP IDLE supervisor.', exc_info=True)
-
 
 def stop_background_threads():
     global supervisor

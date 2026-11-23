@@ -28,7 +28,6 @@ STATE_RETRYING = 'retrying'
 STATE_UNSUPPORTED = 'unsupported'
 STATE_STOPPED = 'stopped'
 
-
 @dataclasses.dataclass(frozen=True)
 class AccountSnapshot:
     '''
@@ -62,7 +61,6 @@ class AccountSnapshot:
             folder_name=folder.name,
         )
 
-
 def find_inbox_folder(account):
     '''
     Return the account's selectable INBOX folder, or None.
@@ -77,7 +75,6 @@ def find_inbox_folder(account):
             continue
         return folder
     return None
-
 
 class IdleWatcher:
     '''
@@ -268,7 +265,6 @@ class IdleWatcher:
                     session.close(graceful=graceful)
 
         self._notify_state(STATE_STOPPED)
-
 
 class IdleSupervisor:
     '''

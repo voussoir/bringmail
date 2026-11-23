@@ -13,7 +13,6 @@ from bringmail import exceptions
 from bringmail import idle
 from bringmail import idle_supervisor
 
-
 def make_snapshot():
     return idle_supervisor.AccountSnapshot(
         id=1,
@@ -27,7 +26,6 @@ def make_snapshot():
         folder_id=10,
         folder_name='INBOX',
     )
-
 
 class FakeSession:
     def __init__(self, snapshot, folder_name, **kwargs):
@@ -56,7 +54,6 @@ class FakeSession:
     def close(self, graceful=True):
         self.closed.append(graceful)
 
-
 class RecordingFactory:
     def __init__(self, session_class=FakeSession):
         self.session_class = session_class
@@ -68,7 +65,6 @@ class RecordingFactory:
         session = self.session_class(snapshot, folder_name, **kwargs)
         self.sessions.append(session)
         return session
-
 
 class OneEventSession(FakeSession):
     def __init__(self, *args, **kwargs):
@@ -83,11 +79,9 @@ class OneEventSession(FakeSession):
             return [idle.IdleEvent(idle.EVENT_EXISTS, count=1)]
         return []
 
-
 class UnsupportedSession(FakeSession):
     def open(self):
         raise exceptions.IdleUnsupported()
-
 
 class DisconnectOnceSession(FakeSession):
     def __init__(self, *args, **kwargs):
@@ -100,7 +94,6 @@ class DisconnectOnceSession(FakeSession):
             time.sleep(0.01)
             raise exceptions.IdleDisconnected('socket error: EOF')
         return super().poll(timeout=timeout)
-
 
 class IdleWatcherTest(unittest.TestCase):
     def test_connected_catch_up_and_event(self):
@@ -275,7 +268,6 @@ class IdleWatcherTest(unittest.TestCase):
 
         self.assertEqual(len(changes), 2)
         self.assertEqual(changes[1], [second])
-
 
 if __name__ == '__main__':
     unittest.main()

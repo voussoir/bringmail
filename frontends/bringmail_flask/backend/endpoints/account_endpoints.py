@@ -11,20 +11,17 @@ from .. import common
 
 site = common.site
 
-
 def _form_bool(name, default):
     value = request.form.get(name)
     if value is None:
         return default
     return stringtools.truthystring(value)
 
-
 def _form_int(name, default):
     value = request.form.get(name)
     if value is None or value.strip() == '':
         return default
     return int(value)
-
 
 def _invalid(message):
     return flasktools.json_response(
@@ -36,7 +33,6 @@ def _invalid(message):
         status=400,
     )
 
-
 @site.route('/accounts.json')
 @flasktools.cached_endpoint(max_age=0, etag_function=lambda: common.bringdb.last_commit_id)
 def get_accounts_json():
@@ -45,7 +41,6 @@ def get_accounts_json():
         accounts.append(account.jsonify(folders=True, unread_count=True, pending_count=True))
     return flasktools.json_response(accounts)
 
-
 @site.route('/accounts/refresh_all', methods=['POST'])
 def post_accounts_refresh_all():
     for account in common.bringdb.get_accounts():
@@ -53,7 +48,6 @@ def post_accounts_refresh_all():
             continue
         common.add_account_to_refresh_queue(account, manual=True)
     return flasktools.json_response({})
-
 
 @site.route('/accounts/reorder', methods=['POST'])
 def post_accounts_reorder():
@@ -72,12 +66,10 @@ def post_accounts_reorder():
         for account in accounts
     ])
 
-
 @site.route('/account/<account_id>.json')
 def get_account_json(account_id):
     account = common.get_account(account_id, response_type='json')
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
-
 
 @site.route('/account/add')
 def get_account_add():
@@ -87,7 +79,6 @@ def get_account_add():
         account=None,
         folders=[],
     )
-
 
 @site.route('/account/<account_id>/settings')
 def get_account_settings(account_id):
@@ -99,7 +90,6 @@ def get_account_settings(account_id):
         account=account,
         folders=folders,
     )
-
 
 @site.route('/accounts/add', methods=['POST'])
 def post_accounts_add():
@@ -173,7 +163,6 @@ def post_accounts_add():
     common.AUTOREFRESH_THREAD_EVENTS.put('account changed')
     common.reconfigure_idle_supervisor()
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
-
 
 @site.route('/account/<account_id>/update', methods=['POST'])
 def post_account_update(account_id):
@@ -274,7 +263,6 @@ def post_account_update(account_id):
 
     return flasktools.json_response(account.jsonify(folders=True, unread_count=True, pending_count=True))
 
-
 @site.route('/account/<account_id>/delete', methods=['POST'])
 def post_account_delete(account_id):
     account = common.get_account(account_id, response_type='json')
@@ -285,20 +273,17 @@ def post_account_delete(account_id):
     common.reconfigure_idle_supervisor()
     return flasktools.json_response({})
 
-
 @site.route('/account/<account_id>/refresh', methods=['POST'])
 def post_account_refresh(account_id):
     account = common.get_account(account_id, response_type='json')
     common.add_account_to_refresh_queue(account, manual=True)
     return flasktools.json_response({})
 
-
 @site.route('/account/<account_id>/test', methods=['POST'])
 def post_account_test(account_id):
     account = common.get_account(account_id, response_type='json')
     folder_count = account.test_connection()
     return flasktools.json_response({'folder_count': folder_count})
-
 
 @site.route('/account/<account_id>/folders.json')
 def get_account_folders_json(account_id):

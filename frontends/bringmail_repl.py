@@ -12,7 +12,6 @@ from voussoirkit import pipeable
 
 import bringmail
 
-
 def bringmail_repl_argparse(args):
     global B
     try:
@@ -38,14 +37,12 @@ def bringmail_repl_argparse(args):
                 break
     return 0
 
-
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--exec', dest='exec_statement', default=None)
     parser.set_defaults(func=bringmail_repl_argparse)
     args = parser.parse_args(argv)
     return args.func(args)
-
 
 if __name__ == '__main__':
     raise SystemExit(main(sys.argv[1:]))

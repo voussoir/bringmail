@@ -24,9 +24,7 @@ log = vlogging.getLogger(__name__, 'bringmail_flask_dev')
 import bringmail
 from bringmail_flask import backend
 
-
 site = backend.site
-
 
 def bringmail_flask_dev(
         *,
@@ -76,7 +74,6 @@ def bringmail_flask_dev(
     finally:
         backend.common.stop_background_threads()
 
-
 def bringmail_flask_dev_argparse(args):
     return bringmail_flask_dev(
         host=args.host,
@@ -84,7 +81,6 @@ def bringmail_flask_dev_argparse(args):
         init=args.init,
         localhost_only=args.localhost_only,
     )
-
 
 @vlogging.main_decorator(log=log)
 def main(argv):
@@ -120,7 +116,6 @@ def main(argv):
 
     args = parser.parse_args(argv)
     return args.func(args)
-
 
 if __name__ == '__main__':
     raise SystemExit(main(sys.argv[1:]))

@@ -17,18 +17,15 @@ log = vlogging.getLogger(__name__, 'bringmail_cli')
 
 bringdb = None
 
-
 def load_bringdb():
     global bringdb
     if bringdb is None:
         bringdb = bringmail.bringmaildb.BringMailDB.closest_bringmaildb()
     return bringdb
 
-
 def init_argparse(args):
     bringmail.bringmaildb.BringMailDB(create=True)
     return 0
-
 
 def add_account_argparse(args):
     database = load_bringdb()
@@ -67,7 +64,6 @@ def add_account_argparse(args):
     pipeable.stdout(f'Added {account}.')
     return 0
 
-
 def list_accounts_argparse(args):
     database = load_bringdb()
     for account in database.get_accounts():
@@ -85,7 +81,6 @@ def list_accounts_argparse(args):
         )
     return 0
 
-
 def refresh_argparse(args):
     database = load_bringdb()
     now = bringmail.helpers.now()
@@ -100,7 +95,6 @@ def refresh_argparse(args):
         pipeable.stdout('No accounts are due for refresh.')
     return 0
 
-
 def refresh_all_argparse(args):
     database = load_bringdb()
     for account in list(database.get_accounts()):
@@ -108,7 +102,6 @@ def refresh_all_argparse(args):
         if error:
             pipeable.stderr(f'{account}: {error.splitlines()[-1]}')
     return 0
-
 
 def main(argv):
     parser = argparse.ArgumentParser(
@@ -149,11 +142,9 @@ def main(argv):
         return 1
     return args.func(args)
 
-
 @vlogging.main_decorator(log=log)
 def wrapped_main(argv):
     return main(argv)
-
 
 if __name__ == '__main__':
     raise SystemExit(wrapped_main(sys.argv[1:]))

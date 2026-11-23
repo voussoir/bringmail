@@ -12,7 +12,6 @@ from bringmail import bringmaildb
 from bringmail import constants
 from bringmail import helpers
 
-
 class FakeSessionClient:
     def __init__(self):
         self.selected = None
@@ -74,7 +73,6 @@ class FakeSessionClient:
 
     def shutdown(self):
         self.logged_out = True
-
 
 class SessionTest(unittest.TestCase):
     def setUp(self):
@@ -265,7 +263,6 @@ class SessionTest(unittest.TestCase):
 
         copyuid = helpers.copyuid_from_response(StubClient(), None)
         self.assertEqual(copyuid, (9, {5: 90}))
-
 
 if __name__ == '__main__':
     unittest.main()

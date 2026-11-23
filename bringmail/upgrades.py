@@ -100,7 +100,6 @@ UpgradeFunction = typing.Callable[['Migrator'], None]
 
 UPGRADES: dict[tuple[int, int], UpgradeFunction] = {}
 
-
 def upgrade_function(from_version, to_version):
     '''
     Register a version-to-version migration function.
@@ -115,12 +114,10 @@ def upgrade_function(from_version, to_version):
         return function
     return register
 
-
 def _assert_identifier(name):
     if not isinstance(name, str) or not name.isidentifier():
         raise ValueError(f'Invalid SQL identifier: {name!r}')
     return name
-
 
 @dataclasses.dataclass(frozen=True)
 class UpgradeReport:
@@ -136,7 +133,6 @@ class UpgradeReport:
     @property
     def upgraded(self):
         return bool(self.applied)
-
 
 class Migrator:
     '''
@@ -328,7 +324,6 @@ class Migrator:
         for statement in statements:
             self.execute(statement)
 
-
 def _set_foreign_keys(db, enabled):
     '''
     Set PRAGMA foreign_keys and verify that it took effect.
@@ -345,7 +340,6 @@ def _set_foreign_keys(db, enabled):
             f'Could not {action} foreign key enforcement. '
             'Close any other BringMail processes and try again.'
         )
-
 
 def _backup_database(db: bringmaildb.BringMailDB, version: int):
     source = db.database_filepath
@@ -365,7 +359,6 @@ def _backup_database(db: bringmaildb.BringMailDB, version: int):
         destination.close()
     return backup.absolute_path
 
-
 def _open_database(data_directory=None):
     if data_directory is None:
         return bringmaildb.BringMailDB.closest_bringmaildb(skip_version_check=True)
@@ -374,7 +367,6 @@ def _open_database(data_directory=None):
         create=False,
         skip_version_check=True,
     )
-
 
 @upgrade_function(1, 2)
 def upgrade_1_to_2(migrator):
@@ -429,7 +421,6 @@ def upgrade_1_to_2(migrator):
         ''',
     ))
 
-
 @upgrade_function(2, 3)
 def upgrade_2_to_3(migrator):
     '''
@@ -477,7 +468,6 @@ def upgrade_2_to_3(migrator):
         END
         ''',
     ))
-
 
 def upgrade_all(
         data_directory=None,

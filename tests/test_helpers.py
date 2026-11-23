@@ -11,7 +11,6 @@ from bringmail import helpers
 
 FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'simple.eml')
 
-
 class HelpersTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -152,7 +151,6 @@ class HelpersTest(unittest.TestCase):
         )
         (message, meta) = helpers.parse_full_message(raw, internaldate=internaldate)
         self.assertEqual(meta['date_unix'], int(internaldate.timestamp()))
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -15,9 +15,7 @@ from bringmail import constants
 from bringmail import exceptions
 from bringmail import helpers
 
-
 FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'simple.eml')
-
 
 class DatabaseTest(unittest.TestCase):
     @classmethod
@@ -515,7 +513,6 @@ class DatabaseTest(unittest.TestCase):
         with self.assertRaises(exceptions.InvalidAccount):
             with self.db.transaction:
                 offline.set_label(None)
-
 
 if __name__ == '__main__':
     unittest.main()

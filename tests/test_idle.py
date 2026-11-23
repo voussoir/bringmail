@@ -11,7 +11,6 @@ if REPO_ROOT not in sys.path:
 from bringmail import exceptions
 from bringmail import idle
 
-
 class FakeIdleClient:
     def __init__(self):
         self.capabilities = {'IDLE'}
@@ -53,7 +52,6 @@ class FakeIdleClient:
 
     def shutdown(self):
         self.shutdown_called = True
-
 
 class IdleSessionTest(unittest.TestCase):
     def setUp(self):
@@ -225,7 +223,6 @@ class IdleSessionTest(unittest.TestCase):
 
         other = idle.parse_response((1, b'RECENT'))
         self.assertEqual(other.kind, idle.EVENT_OTHER)
-
 
 if __name__ == '__main__':
     unittest.main()

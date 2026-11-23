@@ -21,16 +21,13 @@ log = vlogging.get_logger(__name__)
 
 RNG = random.SystemRandom()
 
-
 def _placeholders(count):
     return '(' + ', '.join('?' * count) + ')'
-
 
 def _chunks(items, size):
     items = list(items)
     for index in range(0, len(items), size):
         yield items[index:index + size]
-
 
 def _split_imap_flags(flags):
     '''
@@ -54,7 +51,6 @@ def _split_imap_flags(flags):
     ]
     return (standard, sorted(set(keywords)))
 
-
 def _response_body_bytes(data):
     for key in (b'BODY[]', b'BODY.PEEK[]'):
         if key in data:
@@ -64,13 +60,11 @@ def _response_body_bytes(data):
             return value
     return None
 
-
 def _response_header_bytes(data):
     for (key, value) in data.items():
         if isinstance(key, bytes) and key.startswith(b'BODY[HEADER'):
             return value
     return None
-
 
 def _response_flag_info(data):
     flags = data.get(b'FLAGS', ())
@@ -86,7 +80,6 @@ def _response_flag_info(data):
         modseq = None
     return (standard, keywords, modseq)
 
-
 def _client_has_capability(client, capability):
     '''
     Best-effort capability check for both real and test clients.
@@ -95,7 +88,6 @@ def _client_has_capability(client, capability):
         return bool(client.has_capability(capability))
     except Exception:
         return False
-
 
 class BDBAccountMixin:
     def __init__(self):
@@ -287,7 +279,6 @@ class BDBAccountMixin:
             account.set_ui_order_rank(index + 1)
         return ordered
 
-
 class BDBFolderMixin:
     def __init__(self):
         super().__init__()
@@ -388,7 +379,6 @@ class BDBFolderMixin:
             fallback=0,
         )
         return rank or 0
-
 
 class BDBMessageMixin:
     def __init__(self):
@@ -594,7 +584,6 @@ class BDBMessageMixin:
         FROM messages WHERE folder_id == ?
         '''
         return {row['uid']: row for row in self.select(query, [folder.id])}
-
 
 class BDBSyncMixin:
     def __init__(self):
@@ -1184,7 +1173,6 @@ class BDBSyncMixin:
                 total=total,
             )
 
-
 class BDBPendingMixin:
     '''
     Storage for the offline pending-operations queue.
@@ -1510,7 +1498,6 @@ class BDBPendingMixin:
             bindings,
         )
 
-
 def _outbox_message_flags(message):
     '''
     Flags to carry across an account boundary. \\Deleted is deliberately not
@@ -1531,7 +1518,6 @@ def _outbox_message_flags(message):
             flags.append(keyword)
     return flags
 
-
 def _outbox_message_time(message):
     '''
     The source INTERNALDATE as a UTC datetime, falling back to the Date header.
@@ -1545,7 +1531,6 @@ def _outbox_message_time(message):
         return datetime.datetime.fromtimestamp(int(value), datetime.timezone.utc)
     except (OverflowError, OSError, ValueError):
         return None
-
 
 class BDBOutboxMixin:
     '''
@@ -2419,7 +2404,6 @@ class BDBOutboxMixin:
 
         self.caches[objects.Message].clear()
         return target.id
-
 
 class BringMailDB(
         BDBAccountMixin,

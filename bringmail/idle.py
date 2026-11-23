@@ -39,7 +39,6 @@ _EXPECTED_DISCONNECTS = (
     ssl.SSLEOFError,
 )
 
-
 @dataclasses.dataclass(frozen=True)
 class IdleEvent:
     '''
@@ -51,7 +50,6 @@ class IdleEvent:
     text: str | None = None
     raw: tuple = ()
 
-
 def _decode(value):
     if value is None:
         return None
@@ -59,13 +57,11 @@ def _decode(value):
         return value.decode('utf-8', 'replace')
     return str(value)
 
-
 def _maybe_int(value):
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
-
 
 def parse_response(response):
     '''
@@ -112,7 +108,6 @@ def parse_response(response):
             )
 
     return IdleEvent(EVENT_OTHER, raw=response)
-
 
 class IdleSession:
     '''

@@ -15,13 +15,11 @@ from voussoirkit import worms
 
 log = vlogging.get_logger(__name__)
 
-
 def _row_get(row, key, default=None):
     try:
         return row[key]
     except (KeyError, IndexError):
         return default
-
 
 def _loads_json(value, default):
     if not value:
@@ -32,7 +30,6 @@ def _loads_json(value, default):
         return json.loads(value)
     except (TypeError, ValueError):
         return default
-
 
 def move_message_on_server(
         client,
@@ -161,12 +158,10 @@ def move_message_on_server(
             )
     return (new_uid, new_uidvalidity, 'search')
 
-
 class ObjectBase(worms.Object):
     def __init__(self, bringmaildb):
         super().__init__(bringmaildb)
         self.bringmaildb = bringmaildb
-
 
 class Account(ObjectBase):
     table = 'accounts'
@@ -445,7 +440,6 @@ class Account(ObjectBase):
         self.bringmaildb.update(table=Account, pairs=pairs, where_key='id')
         self.username = username
 
-
 class Folder(ObjectBase):
     table = 'folders'
     no_such_exception = exceptions.NoSuchFolder
@@ -541,7 +535,6 @@ class Folder(ObjectBase):
         self.bringmaildb.update(table=Folder, pairs=pairs, where_key='id')
         self.sync_enabled = sync_enabled
 
-
 @dataclasses.dataclass(frozen=True)
 class MoveToAccountResult:
     '''
@@ -550,7 +543,6 @@ class MoveToAccountResult:
     queued: bool
     copy_only: bool
     operation: str
-
 
 class Message(ObjectBase):
     table = 'messages'
@@ -1105,5 +1097,3 @@ class Message(ObjectBase):
             return
         self._imap_flag(b'\\Seen', seen)
         self._set_local_flag('seen', seen)
-
-

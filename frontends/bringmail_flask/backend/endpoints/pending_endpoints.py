@@ -14,7 +14,6 @@ VISIBLE_STATES = (
     bringmail.constants.PENDING_STATE_FAILED,
 )
 
-
 @site.route('/account/<account_id>/pending.json')
 def get_account_pending_json(account_id):
     account = common.get_account(account_id, response_type='json')
@@ -32,7 +31,6 @@ def get_account_pending_json(account_id):
         ],
     })
 
-
 @site.route('/account/<account_id>/flush', methods=['POST'])
 def post_account_flush(account_id):
     account = common.get_account(account_id, response_type='json')
@@ -42,7 +40,6 @@ def post_account_flush(account_id):
         'account_id': account.id,
     })
 
-
 @site.route('/account/<account_id>/pending/discard', methods=['POST'])
 def post_account_pending_discard(account_id):
     account = common.get_account(account_id, response_type='json')
@@ -51,7 +48,6 @@ def post_account_pending_discard(account_id):
         'type': 'discard_queued',
         'account_id': account.id,
     })
-
 
 @site.route('/pending/<operation_id>/dismiss', methods=['POST'])
 def post_pending_dismiss(operation_id):

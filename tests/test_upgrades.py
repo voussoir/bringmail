@@ -13,7 +13,6 @@ from bringmail import constants
 from bringmail import exceptions
 from bringmail import upgrades
 
-
 class UpgradeTest(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -475,7 +474,6 @@ class UpgradeTest(unittest.TestCase):
             self.assertNotIn('sample__new', tables)
         finally:
             db.close()
-
 
 if __name__ == '__main__':
     unittest.main()

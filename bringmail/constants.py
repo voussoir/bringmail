@@ -292,7 +292,6 @@ CREATE INDEX IF NOT EXISTS index_pending_ops_folder_state
     ON pending_operations(folder_id, state);
 '''
 
-
 # Settings used by the network connection. These are applied to both sqlite
 # connections in bringmaildb._load_pragmas.
 READ_PRAGMAS = {

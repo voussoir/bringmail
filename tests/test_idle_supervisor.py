@@ -11,7 +11,6 @@ from bringmail import bringmaildb
 from bringmail import constants
 from bringmail import idle_supervisor
 
-
 class FakeWatcher:
     instances = []
 
@@ -36,7 +35,6 @@ class FakeWatcher:
 
     def join(self, timeout=None):
         pass
-
 
 class IdleSupervisorTest(unittest.TestCase):
     def setUp(self):
@@ -186,7 +184,6 @@ class IdleSupervisorTest(unittest.TestCase):
     def test_find_inbox_folder(self):
         folder = idle_supervisor.find_inbox_folder(self.account)
         self.assertEqual(folder.id, self.inbox.id)
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -19,7 +19,6 @@ from . import exceptions
 from . import helpers
 from . import objects
 
-
 class _FakeImapState:
     '''
     The tiny part of imaplib's state that helpers.copyuid_from_response reads.
@@ -30,10 +29,8 @@ class _FakeImapState:
     def __init__(self):
         self.untagged_responses = {}
 
-
 def _decode_flag(flag):
     return helpers.decode_flag(flag)
-
 
 def _message_flags(message):
     flags = list(helpers.booleans_to_flags(
@@ -47,7 +44,6 @@ def _message_flags(message):
         flags.append(str(keyword).encode('utf-8', 'replace'))
     return flags
 
-
 def _flags_from_imap(flags):
     decoded = [_decode_flag(flag) for flag in (flags or [])]
     keywords = sorted({
@@ -56,7 +52,6 @@ def _flags_from_imap(flags):
     })
     standard = helpers.flags_to_booleans(decoded)
     return (standard, keywords)
-
 
 def _parse_uid_set(text, maximum):
     uids = set()
@@ -76,7 +71,6 @@ def _parse_uid_set(text, maximum):
         else:
             uids.add(int(part))
     return uids
-
 
 class OfflineClient:
     '''

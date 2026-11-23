@@ -30,7 +30,6 @@ from voussoirkit import vlogging
 log = vlogging.get_logger(__name__)
 vlogging.getLogger('imapclient').setLevel(vlogging.WARNING)
 
-
 ####################################################################################################
 # TIME
 
@@ -43,7 +42,6 @@ def now(timestamp=True):
         return n.timestamp()
     return n
 
-
 def datetime_to_timestamp(value):
     if value is None:
         return None
@@ -52,7 +50,6 @@ def datetime_to_timestamp(value):
     if value.tzinfo is None:
         value = value.replace(tzinfo=datetime.timezone.utc)
     return int(value.timestamp())
-
 
 def email_date_timestamp(message, fallback=None):
     '''
@@ -75,7 +72,6 @@ def email_date_timestamp(message, fallback=None):
     except (OverflowError, OSError, ValueError):
         return fallback
 
-
 ####################################################################################################
 # NORMALIZERS
 
@@ -87,7 +83,6 @@ def normalize_bool(value):
     if isinstance(value, str):
         return stringtools.truthystring(value)
     raise TypeError(value)
-
 
 def normalize_int(value, *, minimum=None, maximum=None):
     if isinstance(value, bool):
@@ -104,7 +99,6 @@ def normalize_int(value, *, minimum=None, maximum=None):
         raise ValueError(value)
     return value
 
-
 def normalize_string_blank_to_none(string):
     if string is None:
         return None
@@ -115,7 +109,6 @@ def normalize_string_blank_to_none(string):
         return None
     return string
 
-
 def normalize_string_not_blank(string):
     if not isinstance(string, str):
         raise TypeError(string)
@@ -124,12 +117,10 @@ def normalize_string_not_blank(string):
         raise ValueError(string)
     return string
 
-
 def normalize_string_strip(string):
     if not isinstance(string, str):
         raise TypeError(string)
     return string.strip()
-
 
 ####################################################################################################
 # HEADERS AND ADDRESSES
@@ -140,13 +131,11 @@ def header_value(message, name):
         return None
     return str(value)
 
-
 def _address_to_dict(address):
     return {
         'name': address.display_name or None,
         'addr': address.addr_spec or None,
     }
-
 
 def header_addresses(message, name):
     header = message.get(name)
@@ -170,15 +159,12 @@ def header_addresses(message, name):
         })
     return result
 
-
 MESSAGE_ID_RE = re.compile(r'<[^<>]+>')
-
 
 def header_message_ids(value):
     if value is None:
         return []
     return MESSAGE_ID_RE.findall(str(value))
-
 
 ####################################################################################################
 # MIME PARTS
@@ -197,10 +183,8 @@ def iter_leaf_parts(message):
         yield (index, part)
         index += 1
 
-
 def is_attachment_part(part):
     return part.get_content_disposition() == 'attachment'
-
 
 def part_payload_bytes(part):
     payload = part.get_payload(decode=True)
@@ -210,7 +194,6 @@ def part_payload_bytes(part):
     if isinstance(payload, str):
         return payload.encode('utf-8', 'replace')
     return b''
-
 
 def part_text(part):
     '''
@@ -227,7 +210,6 @@ def part_text(part):
         except LookupError:
             return data.decode('utf-8', 'replace')
 
-
 def find_text_part(message, subtype):
     for part in message.walk():
         if part.get_content_maintype() == 'multipart':
@@ -238,7 +220,6 @@ def find_text_part(message, subtype):
             return part
     return None
 
-
 def content_id_of(part):
     value = part.get('Content-ID')
     if value is None:
@@ -246,7 +227,6 @@ def content_id_of(part):
     value = str(value).strip()
     value = value.strip('<>').strip()
     return value or None
-
 
 def text_from_html(html):
     if not html:
@@ -258,7 +238,6 @@ def text_from_html(html):
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-
 def normalize_plain_text(text):
     if not text:
         return ''
@@ -268,7 +247,6 @@ def normalize_plain_text(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-
 HTML_BLOCK_TAGS = (
     'address', 'article', 'aside', 'blockquote', 'caption', 'dd', 'div',
     'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form',
@@ -276,7 +254,6 @@ HTML_BLOCK_TAGS = (
     'ol', 'p', 'pre', 'section', 'table', 'tbody', 'tfoot', 'thead', 'tr',
     'ul',
 )
-
 
 def html_to_text(html):
     '''
@@ -301,7 +278,6 @@ def html_to_text(html):
     text = soup.get_text('')
     return normalize_plain_text(text)
 
-
 def snippet_from_message(message):
     plain = find_text_part(message, 'plain')
     if plain is not None:
@@ -313,7 +289,6 @@ def snippet_from_message(message):
         text = text_from_html(part_text(html_part))
     text = re.sub(r'\s+', ' ', text).strip()
     return text[:280]
-
 
 ####################################################################################################
 # META
@@ -329,7 +304,6 @@ def _part_meta(index, part):
         'disposition': part.get_content_disposition(),
         'size': len(payload),
     }
-
 
 def build_meta(message, *, internaldate=None, size=None, include_body=True):
     '''
@@ -406,7 +380,6 @@ def build_meta(message, *, internaldate=None, size=None, include_body=True):
 
     return meta
 
-
 def parse_full_message(raw_bytes, *, internaldate=None, size=None):
     if not isinstance(raw_bytes, (bytes, bytearray)):
         raise TypeError(raw_bytes)
@@ -419,7 +392,6 @@ def parse_full_message(raw_bytes, *, internaldate=None, size=None):
         size = len(raw_bytes)
     meta = build_meta(message, internaldate=internaldate, size=size, include_body=True)
     return (message, meta)
-
 
 def parse_header_message(raw_bytes, *, internaldate=None, size=None):
     if not isinstance(raw_bytes, (bytes, bytearray)):
@@ -434,13 +406,11 @@ def parse_header_message(raw_bytes, *, internaldate=None, size=None):
     meta = build_meta(message, internaldate=internaldate, size=size, include_body=False)
     return (message, meta)
 
-
 def headers_text(message):
     lines = []
     for (key, value) in message.items():
         lines.append(f'{key}: {value}')
     return '\n'.join(lines)
-
 
 def empty_meta(*, internaldate=None, size=None, error=None):
     '''
@@ -476,7 +446,6 @@ def empty_meta(*, internaldate=None, size=None, error=None):
     if error:
         meta['parse_error'] = str(error)
     return meta
-
 
 ####################################################################################################
 # HTML SANITIZATION
@@ -521,7 +490,6 @@ STYLE_TAG_BAD_PATTERNS = (
     'behavior:',
 )
 
-
 def _url_is_safe(url, *, allow_data=False):
     if url is None:
         return False
@@ -546,13 +514,11 @@ def _url_is_safe(url, *, allow_data=False):
         return True
     return False
 
-
 def _style_is_safe(style):
     if not style:
         return True
     lower = str(style).lower()
     return not any(pattern in lower for pattern in CSS_BAD_PATTERNS)
-
 
 def sanitize_email_html(html):
     '''
@@ -641,7 +607,6 @@ def sanitize_email_html(html):
         return '\n'.join(style_texts) + '\n' + inner
     return inner
 
-
 REMOTE_URL_RE = re.compile(
     r'''(?:src|srcset|background|poster)\s*=\s*["']?\s*(?:https?:)?//''',
     flags=re.IGNORECASE,
@@ -651,12 +616,10 @@ CSS_URL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
-
 def has_remote_content(html):
     if not html:
         return False
     return bool(REMOTE_URL_RE.search(html) or CSS_URL_RE.search(html))
-
 
 ####################################################################################################
 # READER PAYLOAD
@@ -670,7 +633,6 @@ def inline_image_map(message):
         if content_id:
             mapping[content_id] = index
     return mapping
-
 
 def body_for_message(raw_bytes):
     if not raw_bytes:
@@ -705,7 +667,6 @@ def body_for_message(raw_bytes):
         'attachments': meta['attachments'],
     }
 
-
 def part_payload(raw_bytes, part_index):
     (message, meta) = parse_full_message(raw_bytes)
     for (index, part) in iter_leaf_parts(message):
@@ -719,7 +680,6 @@ def part_payload(raw_bytes, part_index):
             'content_id': content_id_of(part),
         }
     raise exceptions.NoSuchPart(part_index)
-
 
 ####################################################################################################
 # IMAP
@@ -735,7 +695,6 @@ def make_ssl_context():
         except Exception:
             log.warning('Could not load the certifi CA bundle.', exc_info=True)
     return ssl.create_default_context()
-
 
 def connect_imap(account):
     '''
@@ -779,7 +738,6 @@ def connect_imap(account):
 
     return client
 
-
 @contextlib.contextmanager
 def imap_connection(account, *, folder=None, readonly=False):
     client = connect_imap(account)
@@ -791,7 +749,6 @@ def imap_connection(account, *, folder=None, readonly=False):
         with contextlib.suppress(Exception):
             client.logout()
 
-
 def enable_condstore(client):
     if not client.has_capability('CONDSTORE'):
         return False
@@ -801,7 +758,6 @@ def enable_condstore(client):
     except Exception:
         log.debug('Could not ENABLE CONDSTORE, continuing without it.')
     return True
-
 
 COPYUID_RE = re.compile(
     rb'\[COPYUID\s+(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\]',
@@ -813,14 +769,12 @@ COPYUID_DATA_RE = re.compile(
     rb'^\s*(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\s*$',
 )
 
-
 def _response_bytes(value):
     if isinstance(value, bytes):
         return value
     if isinstance(value, str):
         return value.encode('ascii', 'replace')
     return None
-
 
 def _parse_uid_set(text):
     uids = []
@@ -839,7 +793,6 @@ def _parse_uid_set(text):
             uids.append(int(part))
     return uids
 
-
 def _copyuid_from_match(match):
     try:
         uidvalidity = int(match.group(1))
@@ -850,7 +803,6 @@ def _copyuid_from_match(match):
     if not source_uids or len(source_uids) != len(destination_uids):
         return None
     return (uidvalidity, dict(zip(source_uids, destination_uids)))
-
 
 def parse_copyuid(value):
     '''
@@ -872,7 +824,6 @@ def parse_copyuid(value):
         return _copyuid_from_match(match)
     return None
 
-
 def _untagged_values(client, name):
     imap = getattr(client, '_imap', None)
     untagged = getattr(imap, 'untagged_responses', None)
@@ -890,14 +841,12 @@ def _untagged_values(client, name):
                 values.append(value)
     return values
 
-
 def untagged_ok_responses(client):
     '''
     Return the untagged OK response texts currently queued on the imapclient
     connection.
     '''
     return _untagged_values(client, 'OK')
-
 
 def untagged_copyuid_responses(client):
     '''
@@ -906,7 +855,6 @@ def untagged_copyuid_responses(client):
     with the surrounding brackets removed.
     '''
     return _untagged_values(client, 'COPYUID')
-
 
 def copyuid_from_response(client, response, *, before=(), before_copyuid=()):
     '''
@@ -944,12 +892,10 @@ def copyuid_from_response(client, response, *, before=(), before_copyuid=()):
             return parsed
     return None
 
-
 # imaplib stores the contents of a [MODIFIED ...] response code in its own
 # untagged_responses map, and some servers put it in the tagged response text
 # instead. Both forms are accepted.
 MODIFIED_RE = re.compile(rb'\[MODIFIED\s+([0-9,:\s]+)\]', re.IGNORECASE)
-
 
 def _pop_untagged_values(client, name):
     imap = getattr(client, '_imap', None)
@@ -968,11 +914,9 @@ def _pop_untagged_values(client, name):
                 values.append(value)
     return values
 
-
 def _parse_uid_text(text):
     text = text.replace(b' ', b'')
     return _parse_uid_set(text)
-
 
 def modified_from_response(client, data=()):
     '''
@@ -997,7 +941,6 @@ def modified_from_response(client, data=()):
         except ValueError:
             log.debug('Could not parse MODIFIED response %r.', value)
     return uids
-
 
 def conditional_store(client, folder_name, uids, *, add=(), remove=(), since):
     '''
@@ -1037,14 +980,12 @@ def conditional_store(client, folder_name, uids, *, add=(), remove=(), since):
     accepted = set(uids) - modified
     return (accepted, modified)
 
-
 # Authenticated sessions are kept open across message actions so that clicking
 # through a mailbox does not perform a full IMAP login for every read / flag /
 # move. Sync itself uses its own short-lived connection.
 _IMAP_SESSIONS = {}
 _IMAP_SESSION_LOCKS = {}
 _IMAP_SESSIONS_LOCK = threading.Lock()
-
 
 def _imap_session_key(account):
     return (
@@ -1056,7 +997,6 @@ def _imap_session_key(account):
         account.password,
     )
 
-
 def _imap_session_lock(account_id):
     with _IMAP_SESSIONS_LOCK:
         lock = _IMAP_SESSION_LOCKS.get(account_id)
@@ -1064,7 +1004,6 @@ def _imap_session_lock(account_id):
             lock = threading.RLock()
             _IMAP_SESSION_LOCKS[account_id] = lock
         return lock
-
 
 def drop_imap_session(account_id):
     lock = _imap_session_lock(account_id)
@@ -1079,7 +1018,6 @@ def drop_imap_session(account_id):
                     entry['client'].shutdown()
                 except Exception:
                     pass
-
 
 def imap_call(account, function):
     '''
@@ -1151,12 +1089,10 @@ def imap_call(account, function):
                 entry['last_used'] = time.monotonic()
         return result
 
-
 def decode_flag(flag):
     if isinstance(flag, bytes):
         return flag.decode('ascii', 'replace')
     return str(flag)
-
 
 def flags_to_booleans(flags):
     flags = {decode_flag(flag) for flag in flags}
@@ -1168,7 +1104,6 @@ def flags_to_booleans(flags):
         'draft': '\\Draft' in flags,
     }
 
-
 def booleans_to_flags(**booleans):
     mapping = {
         'seen': b'\\Seen',
@@ -1178,7 +1113,6 @@ def booleans_to_flags(**booleans):
         'draft': b'\\Draft',
     }
     return [flag for (name, flag) in mapping.items() if booleans.get(name)]
-
 
 POPULAR_SPECIAL_FOLDER_NAMES = {
     constants.SPECIAL_USE_TRASH: {
@@ -1197,7 +1131,6 @@ POPULAR_SPECIAL_FOLDER_NAMES = {
         'archive', 'archives',
     },
 }
-
 
 def folder_special_use(flags, name):
     name = decode_text(name)
@@ -1222,7 +1155,6 @@ def folder_special_use(flags, name):
             return special_use
     return None
 
-
 def decode_text(value):
     '''
     imapclient returns folder names as str but delimiters and flags as bytes.
@@ -1234,7 +1166,6 @@ def decode_text(value):
     if isinstance(value, bytes):
         return value.decode('utf-8', 'replace')
     return str(value)
-
 
 def folder_display_name(name, delimiter):
     name = decode_text(name)
@@ -1248,14 +1179,12 @@ def folder_display_name(name, delimiter):
         return name
     return parts[-1]
 
-
 def folder_depth(name, delimiter):
     name = decode_text(name)
     delimiter = decode_text(delimiter)
     if not delimiter:
         return 0
     return max(0, len([part for part in name.split(delimiter) if part]) - 1)
-
 
 def folder_sort_key(name, special_use):
     priority = {
@@ -1268,7 +1197,6 @@ def folder_sort_key(name, special_use):
     }.get(special_use, 5)
     return (priority, decode_text(name).lower())
 
-
 ####################################################################################################
 # MISC
 
@@ -1279,7 +1207,6 @@ def maybe_int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
-
 
 def total_size(nbytes):
     if nbytes is None:

@@ -15,7 +15,6 @@ from bringmail import exceptions
 
 FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'simple.eml')
 
-
 class FakeIMAPClient:
     def __init__(self, raws, uidvalidity=100, flags=None):
         self.raws = dict(raws)
@@ -71,7 +70,6 @@ class FakeIMAPClient:
 
     def logout(self):
         self.logged_out = True
-
 
 class SyncTest(unittest.TestCase):
     @classmethod
@@ -373,7 +371,6 @@ class SyncTest(unittest.TestCase):
         inbox = self.db.get_folder(inbox.id)
         self.assertGreater(inbox.last_sync, 0)
         self.assertIsNone(inbox.last_sync_error)
-
 
 if __name__ == '__main__':
     unittest.main()
