@@ -3,7 +3,7 @@ BringMail
 
 It brings you the mail.
 
-I am writing this project with DeepSeek Harness.
+I am writing this project with DeepSeek Harness to see what it's like.
 
 BringMail copies most of its foundation from [BringRSS](https://git.voussoir.net/voussoir/bringrss).
 

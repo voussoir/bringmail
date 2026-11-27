@@ -1,14 +1,13 @@
 '''
-This file is the gevent launcher for local / development use.
+This file is the launcher for local / development use.
 '''
-import gevent.monkey; gevent.monkey.patch_all()
-
 import argparse
-import gevent.pywsgi
 import os
 import pathlib
 import sys
 import traceback
+import werkzeug.serving
+werkzeug.serving._log_add_style = False
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 FRONTENDS_DIR = THIS_DIR.parent
@@ -17,6 +16,7 @@ for path in (str(REPO_ROOT), str(FRONTENDS_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+from voussoirkit import flasktools
 from voussoirkit import vlogging
 
 log = vlogging.getLogger(__name__, 'bringmail_flask_dev')
@@ -57,22 +57,24 @@ def bringmail_flask_dev(
         log.error('Try adding --init to create the database.')
         return 1
 
-    message = f'Starting server on {host}:{port}, pid={os.getpid()}.'
-    log.info(message)
+    log.info(f'Starting server on {host}:{port}, pid={os.getpid()}.')
 
-    backend.common.start_background_threads()
-
-    http = gevent.pywsgi.WSGIServer(
-        listener=(host, port),
-        application=site,
-    )
     try:
-        http.serve_forever()
-    except KeyboardInterrupt:
-        log.info('Goodbye')
-        return 0
-    finally:
+        backend.common.start_background_threads()
+        site.run(
+            host=host,
+            port=port,
+            threaded=True,
+            debug=True,
+            use_reloader=False,
+            request_handler=flasktools.MyWSGIRequestHandler,
+        )
         backend.common.stop_background_threads()
+        backend.common.bringdb.close()
+        return 0
+    except Exception:
+        backend.common.stop_background_threads()
+        return 1
 
 def bringmail_flask_dev_argparse(args):
     return bringmail_flask_dev(

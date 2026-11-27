@@ -157,7 +157,7 @@ class PendingQueueTest(unittest.TestCase):
 
     def _set_folder_state(self, folder, *, uidvalidity, highestmodseq):
         with self.db.transaction:
-            self.db.execute(
+            self.db.execute_write(
                 'UPDATE folders SET uidvalidity = ?, highestmodseq = ? WHERE id == ?',
                 [uidvalidity, highestmodseq, folder.id],
             )
@@ -403,7 +403,7 @@ class PendingQueueTest(unittest.TestCase):
         )
 
         with self.db.transaction:
-            self.db.execute(
+            self.db.execute_write(
                 'UPDATE pending_operations SET next_attempt = 0 WHERE message_id == ?',
                 [self.message.id],
             )
@@ -526,7 +526,7 @@ class PendingQueueTest(unittest.TestCase):
 
     def test_flush_flag_fetch_omits_modseq_without_base_modseq(self):
         with self.db.transaction:
-            self.db.execute(
+            self.db.execute_write(
                 'UPDATE messages SET modseq = NULL WHERE id == ?',
                 [self.message.id],
             )
@@ -645,7 +645,7 @@ class PendingQueueTest(unittest.TestCase):
     def test_expired_row_fails_and_reverts_local_state(self):
         self.message.queue_seen(True)
         with self.db.transaction:
-            self.db.execute(
+            self.db.execute_write(
                 'UPDATE pending_operations SET created = ? WHERE message_id == ?',
                 [0, self.message.id],
             )

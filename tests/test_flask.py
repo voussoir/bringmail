@@ -255,7 +255,7 @@ class FlaskTest(unittest.TestCase):
             'RuntimeError: sample failure'
         )
         with self.db.transaction:
-            self.db.execute(
+            self.db.execute_write(
                 'UPDATE accounts SET last_refresh_error = ? WHERE id == ?',
                 [error, self.account.id],
             )

@@ -540,7 +540,7 @@ class BDBMessageMixin:
         for batch in _chunks(uids, 500):
             qmarks = _placeholders(len(batch))
             query = f'DELETE FROM messages WHERE folder_id == ? AND uid IN {qmarks}'
-            self.execute(query, [folder.id] + batch)
+            self.execute_write(query, [folder.id] + batch)
 
     def get_folder_uids(self, folder):
         query = 'SELECT uid FROM messages WHERE folder_id == ?'
@@ -1218,7 +1218,7 @@ class BDBPendingMixin:
             message_uidvalidity = folder.uidvalidity
 
         now = int(helpers.now())
-        self.execute(
+        self.execute_write(
             '''
             INSERT INTO pending_operations (
                 account_id, folder_id, message_id, message_uid,
@@ -1252,8 +1252,7 @@ class BDBPendingMixin:
                 now,
             ],
         )
-        row = self.sql_write.execute('SELECT last_insert_rowid()').fetchone()
-        return int(row[0])
+        return int(self.select_one_value('SELECT last_insert_rowid()'))
 
     def get_pending_operations(
             self,
@@ -1493,7 +1492,7 @@ class BDBPendingMixin:
             pairs['next_attempt'] = int(next_attempt)
         columns = ', '.join(f'{column} = ?' for column in pairs)
         bindings = list(pairs.values()) + [int(operation_id)]
-        self.execute(
+        self.execute_write(
             f'UPDATE pending_operations SET {columns} WHERE id == ?',
             bindings,
         )
@@ -2431,13 +2430,25 @@ class BringMailDB(
         if self.data_directory.exists and not self.data_directory.is_dir:
             raise exceptions.BadDataDirectory(self.data_directory.absolute_path)
 
-        self._init_sql(create=create, skip_version_check=skip_version_check)
-        self.id_type = int
-        self._init_column_index()
-        self._init_caches()
+        self.database_filepath = self.data_directory.with_child(constants.DEFAULT_DBNAME)
+        existing_database = self.database_filepath.exists
 
-    def __del__(self):
-        self.close()
+        if not existing_database and not create:
+            message = f'"{self.database_filepath.absolute_path}" does not exist and create is off.'
+            raise FileNotFoundError(message)
+
+        self.data_directory.makedirs(exist_ok=True)
+
+        self.connect(self.database_filepath)
+
+        if existing_database:
+            if not skip_version_check:
+                self._check_version()
+        else:
+            self._first_time_setup()
+
+        self.id_type = int
+        self._init_caches()
 
     def __repr__(self):
         return f'BringMailDB(data_directory={self.data_directory})'
@@ -2452,7 +2463,7 @@ class BringMailDB(
             )
 
     def _check_version(self):
-        existing = int(self.pragma_read('user_version') or 0)
+        existing = int(self.pragma_read_one('user_version') or 0)
         if existing > constants.DATABASE_VERSION:
             raise exceptions.DatabaseTooNew(
                 existing=existing,
@@ -2467,12 +2478,9 @@ class BringMailDB(
     def _first_time_setup(self):
         log.info('Running first-time database setup.')
         with self.transaction:
-            for statement in constants.DB_INIT.split(';'):
-                statement = statement.strip()
-                if statement:
-                    self.execute(statement)
+            self.execute_script(constants.DB_INIT)
             for statement in constants.DB_TRIGGERS:
-                self.execute(statement)
+                self.execute_write(statement)
             self.pragma_write('user_version', constants.DATABASE_VERSION)
 
     def _init_caches(self):
@@ -2481,66 +2489,6 @@ class BringMailDB(
             objects.Folder: cacheclass.Cache(maxlen=2000),
             objects.Message: cacheclass.Cache(maxlen=5000),
         }
-
-    def _init_column_index(self):
-        tables = [
-            row['name'] for row in self.select(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-            if not row['name'].startswith('sqlite_')
-        ]
-        columns = {}
-        for table in tables:
-            rows = self.select(f'PRAGMA table_xinfo("{table}")')
-            columns[table] = [row['name'] for row in rows]
-        self.COLUMNS = columns
-        self.COLUMN_INDEX = {
-            table: {column: index for (index, column) in enumerate(names)}
-            for (table, names) in columns.items()
-        }
-
-    def _init_sql(self, create=False, skip_version_check=True):
-        self.database_filepath = self.data_directory.with_child(constants.DEFAULT_DBNAME)
-        existing_database = self.database_filepath.exists
-
-        if not existing_database and not create:
-            message = f'"{self.database_filepath.absolute_path}" does not exist and create is off.'
-            raise FileNotFoundError(message)
-
-        self.data_directory.makedirs(exist_ok=True)
-
-        if not existing_database:
-            # The read connection below uses mode=ro and cannot create the
-            # file, so create an empty one first.
-            sqlite3.connect(self.database_filepath.absolute_path).close()
-
-        # Open the writer first so WAL mode is established before the read-only
-        # connection is created. Changing journal mode while another connection
-        # is active is avoidable.
-        self.sql_write = self._make_sqlite_write_connection(self.database_filepath)
-        self._load_write_pragmas()
-        self.sql_read = self._make_sqlite_read_connection(self.database_filepath)
-        self._load_read_pragmas()
-
-        if existing_database:
-            if not skip_version_check:
-                self._check_version()
-        else:
-            self._first_time_setup()
-
-    def _load_pragmas(self):
-        # Kept for compatibility with callers that reinitialize pragmas after a
-        # connection recovery.
-        self._load_write_pragmas()
-        self._load_read_pragmas()
-
-    def _load_write_pragmas(self):
-        for (key, value) in constants.WRITE_PRAGMAS.items():
-            self.sql_write.execute(f'PRAGMA {key} = {value}')
-
-    def _load_read_pragmas(self):
-        for (key, value) in constants.READ_PRAGMAS.items():
-            self.sql_read.execute(f'PRAGMA {key} = {value}')
 
     @classmethod
     def closest_bringmaildb(cls, path='.', *args, **kwargs):
@@ -2562,29 +2510,6 @@ class BringMailDB(
         for cache in self.caches.values():
             cache.clear()
 
-    def close(self):
-        super().close()
-
-    def _make_sqlite_read_connection(self, path):
-        # The web request threads and the background sync worker both use these
-        # connections. SQLite's default check_same_thread would reject that.
-        if isinstance(path, pathclass.Path):
-            path = path.absolute_path
-        sql_read = sqlite3.connect(
-            f'file:{path}?mode=ro',
-            uri=True,
-            check_same_thread=False,
-        )
-        sql_read.row_factory = sqlite3.Row
-        return sql_read
-
-    def _make_sqlite_write_connection(self, path):
-        if isinstance(path, pathclass.Path):
-            path = path.absolute_path
-        sql_write = sqlite3.connect(path, check_same_thread=False)
-        sql_write.row_factory = sqlite3.Row
-        return sql_write
-
     def generate_id(self, thing_class):
         if not issubclass(thing_class, objects.ObjectBase):
             raise TypeError(thing_class)
@@ -2592,5 +2517,5 @@ class BringMailDB(
         table = thing_class.table
         while True:
             thing_id = RNG.getrandbits(32)
-            if not self.exists(f'SELECT 1 FROM {table} WHERE id == ?', [thing_id]):
+            if not self.select_exists(f'SELECT 1 FROM {table} WHERE id == ?', [thing_id]):
                 return thing_id

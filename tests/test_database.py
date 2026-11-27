@@ -80,7 +80,7 @@ class DatabaseTest(unittest.TestCase):
 
     def test_sqlite_version(self):
         self.assertGreaterEqual(sqlite3.sqlite_version_info, constants.MINIMUM_SQLITE)
-        self.assertEqual(self.db.pragma_read('user_version'), constants.DATABASE_VERSION)
+        self.assertEqual(self.db.pragma_read_one('user_version'), constants.DATABASE_VERSION)
 
     def test_page_size(self):
         self.assertEqual(constants.DEFAULT_PAGE_SIZE, 500)
@@ -453,25 +453,25 @@ class DatabaseTest(unittest.TestCase):
 
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db.transaction:
-                self.db.execute(
+                self.db.execute_write(
                     'UPDATE accounts SET host = NULL WHERE id == ?',
                     [online.id],
                 )
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db.transaction:
-                self.db.execute(
+                self.db.execute_write(
                     "UPDATE accounts SET host = 'imap.example.com' WHERE id == ?",
                     [offline.id],
                 )
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db.transaction:
-                self.db.execute(
+                self.db.execute_write(
                     'UPDATE accounts SET username = NULL WHERE id == ?',
                     [online.id],
                 )
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db.transaction:
-                self.db.execute(
+                self.db.execute_write(
                     "UPDATE accounts SET password = 'x' WHERE id == ?",
                     [offline.id],
                 )
@@ -483,13 +483,13 @@ class DatabaseTest(unittest.TestCase):
 
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db.transaction:
-                self.db.execute(
+                self.db.execute_write(
                     'UPDATE accounts SET offline = 1 WHERE id == ?',
                     [online.id],
                 )
         with self.assertRaises(sqlite3.IntegrityError):
             with self.db.transaction:
-                self.db.execute(
+                self.db.execute_write(
                     'UPDATE accounts SET offline = 0 WHERE id == ?',
                     [offline.id],
                 )

@@ -44,7 +44,9 @@ import os
 import sqlite3
 import time
 import typing
+import shutil
 
+from voussoirkit import pathclass
 from voussoirkit import vlogging
 
 from . import bringmaildb
@@ -149,14 +151,14 @@ class Migrator:
 
     def execute(self, sql, bindings=None):
         if bindings is None:
-            return self.db.execute(sql)
-        return self.db.execute(sql, bindings)
+            return self.db.execute_write(sql)
+        return self.db.execute_write(sql, bindings)
 
-    def executescript(self, script):
+    def execute_script(self, script):
         '''
         Execute a DDL script inside the migration transaction.
         '''
-        self.db.executescript(script)
+        self.db.execute_script(script)
 
     def add_column(self, table, column, definition):
         '''
@@ -208,12 +210,11 @@ class Migrator:
         3 for STORED generated columns. Generated columns must be omitted from
         INSERT statements.
         '''
-        rows = self.db.sql_write.execute(f'PRAGMA table_xinfo("{table}")').fetchall()
+        rows = self.db.pragma_read_all(f'table_xinfo("{table}")')
         return [(row['name'], row['hidden']) for row in rows]
 
     def _row_count(self, table):
-        row = self.db.sql_write.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
-        return int(row[0])
+        return self.db.select_one_value(f'SELECT COUNT(*) FROM "{table}"')
 
     def rebuild_table(
             self,
@@ -332,9 +333,9 @@ def _set_foreign_keys(db, enabled):
     which would make a table rebuild cascade-delete child rows.
     '''
     value = 'ON' if enabled else 'OFF'
-    db.sql_write.execute(f'PRAGMA foreign_keys = {value}')
-    row = db.sql_write.execute('PRAGMA foreign_keys').fetchone()
-    if bool(row[0]) != bool(enabled):
+    db.pragma_write('foreign_keys', value)
+    row = db.pragma_read_one('foreign_keys')
+    if bool(row) != bool(enabled):
         action = 'enable' if enabled else 'disable'
         raise exceptions.DatabaseUpgradeError(
             f'Could not {action} foreign key enforcement. '
@@ -345,19 +346,15 @@ def _backup_database(db: bringmaildb.BringMailDB, version: int):
     source = db.database_filepath
     stamp = time.strftime('%Y%m%d-%H%M%S', time.localtime())
     base_name = f'{source.basename}.bak-v{version}-{stamp}-{os.getpid()}'
-    backup = source.parent.with_child(base_name)
+    backup_file = source.parent.with_child(base_name)
     suffix = 1
-    while backup.exists:
-        backup = source.parent.with_child(f'{base_name}-{suffix}')
+    while backup_file.exists:
+        backup_file = source.parent.with_child(f'{base_name}-{suffix}')
         suffix += 1
 
-    log.info('Backing up database to "%s".', backup.absolute_path)
-    destination = sqlite3.connect(backup.absolute_path)
-    try:
-        db.sql_write.backup(destination)
-    finally:
-        destination.close()
-    return backup.absolute_path
+    log.info('Backing up database to "%s".', backup_file.absolute_path)
+    db.backup(backup_file)
+    return backup_file.absolute_path
 
 def _open_database(data_directory=None):
     if data_directory is None:
@@ -510,7 +507,7 @@ def upgrade_all(
 
     db = _open_database(data_directory)
     try:
-        start_version = int(db.pragma_read('user_version') or 0)
+        start_version = int(db.pragma_read_one('user_version') or 0)
         if start_version > target_version:
             raise exceptions.DatabaseTooNew(
                 existing=start_version,
@@ -552,7 +549,7 @@ def upgrade_all(
                 try:
                     with db.transaction:
                         current_version = int(
-                            db.sql_write.execute('PRAGMA user_version').fetchone()[0]
+                            db.pragma_read_one('user_version')
                         )
                         if current_version != version - 1:
                             raise exceptions.DatabaseUpgradeError(
@@ -563,9 +560,7 @@ def upgrade_all(
                         migrator = Migrator(db)
                         function(migrator)
 
-                        violations = db.sql_write.execute(
-                            'PRAGMA foreign_key_check'
-                        ).fetchall()
+                        violations = db.pragma_read_all('foreign_key_check')
                         if violations:
                             raise exceptions.DatabaseUpgradeError(
                                 f'Upgrade to version {version} left '
@@ -586,7 +581,7 @@ def upgrade_all(
                 log.warning('Could not re-enable foreign key enforcement.', exc_info=True)
 
         final_version = int(
-            db.sql_write.execute('PRAGMA user_version').fetchone()[0]
+            db.pragma_read_one('user_version')
         )
         if final_version != target_version:
             raise exceptions.DatabaseUpgradeError(

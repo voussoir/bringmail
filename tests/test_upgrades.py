@@ -82,8 +82,8 @@ class UpgradeTest(unittest.TestCase):
         db = self.open_database()
         try:
             with db.transaction:
-                db.execute('DROP TABLE IF EXISTS pending_operations')
-                db.execute('ALTER TABLE messages DROP COLUMN local_deleted')
+                db.execute_write('DROP TABLE IF EXISTS pending_operations')
+                db.execute_write('ALTER TABLE messages DROP COLUMN local_deleted')
                 db.pragma_write('user_version', 1)
         finally:
             db.close()
@@ -95,7 +95,7 @@ class UpgradeTest(unittest.TestCase):
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), 3)
+            self.assertEqual(db.pragma_read_one('user_version'), 3)
             tables = [
                 row['name']
                 for row in db.select("SELECT name FROM sqlite_master WHERE type == 'table'")
@@ -103,7 +103,7 @@ class UpgradeTest(unittest.TestCase):
             self.assertIn('pending_operations', tables)
             columns = [
                 row['name']
-                for row in db.sql_write.execute('PRAGMA table_xinfo("messages")').fetchall()
+                for row in db.pragma_read_all('table_xinfo("messages")')
             ]
             self.assertIn('local_deleted', columns)
             indexes = [
@@ -123,10 +123,10 @@ class UpgradeTest(unittest.TestCase):
         db = self.open_database()
         try:
             account_id = db.select_one_value('SELECT id FROM accounts')
-            db.sql_write.execute('PRAGMA foreign_keys = OFF')
+            db.pragma_write('foreign_keys', 'off')
             with db.transaction:
-                db.execute('DROP TABLE accounts')
-                db.execute('''
+                db.execute_write('DROP TABLE accounts')
+                db.execute_write('''
                 CREATE TABLE accounts(
                     id INTEGER PRIMARY KEY,
                     label TEXT,
@@ -144,7 +144,7 @@ class UpgradeTest(unittest.TestCase):
                     last_refresh_error TEXT
                 )
                 ''')
-                db.execute(
+                db.execute_write(
                     '''
                     INSERT INTO accounts (
                         id, label, host, port, ssl, starttls, username,
@@ -180,10 +180,10 @@ class UpgradeTest(unittest.TestCase):
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), 3)
+            self.assertEqual(db.pragma_read_one('user_version'), 3)
             columns = {
                 row['name']: row
-                for row in db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
+                for row in db.pragma_read_all('table_xinfo("accounts")')
             }
             self.assertIn('offline', columns)
             self.assertEqual(columns['offline']['dflt_value'], '0')
@@ -213,7 +213,7 @@ class UpgradeTest(unittest.TestCase):
 
             with self.assertRaises(sqlite3.IntegrityError):
                 with db.transaction:
-                    db.execute(
+                    db.execute_write(
                         'UPDATE accounts SET offline = 1 WHERE id == ?',
                         [account_id],
                     )
@@ -255,8 +255,8 @@ class UpgradeTest(unittest.TestCase):
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), target)
-            rows = db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
+            self.assertEqual(db.pragma_read_one('user_version'), target)
+            rows = db.pragma_read_all('table_xinfo("accounts")')
             names = [row['name'] for row in rows]
             self.assertIn('test_upgrade_column', names)
             self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM accounts'), 1)
@@ -290,8 +290,8 @@ class UpgradeTest(unittest.TestCase):
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), second)
-            rows = db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
+            self.assertEqual(db.pragma_read_one('user_version'), second)
+            rows = db.pragma_read_all('table_xinfo("accounts")')
             names = [row['name'] for row in rows]
             self.assertIn('upgrade_a', names)
             self.assertIn('upgrade_b', names)
@@ -321,8 +321,8 @@ class UpgradeTest(unittest.TestCase):
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), start)
-            rows = db.sql_write.execute('PRAGMA table_xinfo("accounts")').fetchall()
+            self.assertEqual(db.pragma_read_one('user_version'), start)
+            rows = db.pragma_read_all('table_xinfo("accounts")')
             names = [row['name'] for row in rows]
             self.assertNotIn('test_upgrade_column', names)
         finally:
@@ -377,7 +377,7 @@ class UpgradeTest(unittest.TestCase):
 
         db = self.open_database()
         try:
-            self.assertEqual(db.pragma_read('user_version'), start)
+            self.assertEqual(db.pragma_read_one('user_version'), start)
             self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM folders'), 1)
             self.assertEqual(db.select_one_value('SELECT COUNT(id) FROM messages'), 1)
         finally:
@@ -391,22 +391,22 @@ class UpgradeTest(unittest.TestCase):
         try:
             # A table rebuild must be done with foreign key enforcement off,
             # which is what upgrade_all does around the whole chain.
-            db.sql_write.execute('PRAGMA foreign_keys = OFF')
+            db.pragma_write('foreign_keys', 'OFF')
             with db.transaction:
-                db.execute('''
+                db.execute_write('''
                 CREATE TABLE parent (
                     id INTEGER PRIMARY KEY,
                     name TEXT
                 )
                 ''')
-                db.execute('''
+                db.execute_write('''
                 CREATE TABLE child (
                     id INTEGER PRIMARY KEY,
                     parent_id INTEGER REFERENCES parent(id)
                 )
                 ''')
-                db.execute("INSERT INTO parent VALUES (1, 'one')")
-                db.execute('INSERT INTO child VALUES (10, 1)')
+                db.execute_write("INSERT INTO parent VALUES (1, 'one')")
+                db.execute_write('INSERT INTO child VALUES (10, 1)')
 
             with db.transaction:
                 migrator = upgrades.Migrator(db)
@@ -421,11 +421,11 @@ class UpgradeTest(unittest.TestCase):
                     ''',
                 )
 
-            db.sql_write.execute('PRAGMA foreign_keys = ON')
-            violations = db.sql_write.execute('PRAGMA foreign_key_check').fetchall()
+            db.pragma_write('foreign_keys', 'ON')
+            violations = db.pragma_read_all('foreign_key_check')
             self.assertEqual(violations, [])
-            row = db.sql_write.execute('SELECT parent_id FROM child').fetchone()
-            self.assertEqual(row[0], 1)
+            row = db.select_one_value('SELECT parent_id FROM child')
+            self.assertEqual(row, 1)
         finally:
             db.close()
 
@@ -436,14 +436,14 @@ class UpgradeTest(unittest.TestCase):
         )
         try:
             with db.transaction:
-                db.execute('''
+                db.execute_write('''
                 CREATE TABLE sample (
                     id INTEGER PRIMARY KEY,
                     value TEXT,
                     upper_value TEXT GENERATED ALWAYS AS (upper(value)) VIRTUAL
                 )
                 ''')
-                db.execute("INSERT INTO sample (value) VALUES ('abc')")
+                db.execute_write("INSERT INTO sample (value) VALUES ('abc')")
 
             with db.transaction:
                 migrator = upgrades.Migrator(db)
@@ -459,17 +459,12 @@ class UpgradeTest(unittest.TestCase):
                     ''',
                 )
 
-            row = db.sql_write.execute(
+            row = db.select_one(
                 'SELECT id, value, upper_value, extra FROM sample'
-            ).fetchone()
+            )
             self.assertEqual(tuple(row), (1, 'abc', 'ABC', 'x'))
 
-            tables = [
-                row['name']
-                for row in db.sql_write.execute(
-                    "SELECT name FROM sqlite_master WHERE type == 'table'"
-                )
-            ]
+            tables = db.get_tables()
             self.assertIn('sample', tables)
             self.assertNotIn('sample__new', tables)
         finally:

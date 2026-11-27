@@ -220,7 +220,7 @@ class SyncTest(unittest.TestCase):
                 meta=meta,
                 size=0,
             )
-            self.db.execute(
+            self.db.execute_write(
                 'UPDATE accounts SET last_refresh_attempt = ? WHERE id == ?',
                 [1234, self.account.id],
             )

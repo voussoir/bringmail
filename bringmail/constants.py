@@ -186,7 +186,7 @@ FOR EACH ROW
 WHEN NEW.offline != OLD.offline
 BEGIN
     SELECT RAISE(ABORT, 'An account cannot be converted between online and offline.');
-END
+END;
 ''',
 )
 
@@ -291,21 +291,3 @@ CREATE INDEX IF NOT EXISTS index_pending_ops_message
 CREATE INDEX IF NOT EXISTS index_pending_ops_folder_state
     ON pending_operations(folder_id, state);
 '''
-
-# Settings used by the network connection. These are applied to both sqlite
-# connections in bringmaildb._load_pragmas.
-READ_PRAGMAS = {
-    'busy_timeout': 5000,
-    'cache_size': -50000,
-    'foreign_keys': 'on',
-    'query_only': 'on',
-}
-
-WRITE_PRAGMAS = {
-    'busy_timeout': 5000,
-    'cache_size': -50000,
-    'foreign_keys': 'on',
-    'journal_mode': 'wal',
-    'synchronous': 'normal',
-    'temp_store': 'memory',
-}
